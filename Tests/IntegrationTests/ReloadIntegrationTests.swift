@@ -1,5 +1,7 @@
 import Foundation
+import HTTPCore
 import HTTPTestSupport
+import NetworkTransport
 import Testing
 
 /// #0127 acceptance through the shipped `SwiftWebServer` binary: SIGHUP reopens the access log
@@ -135,6 +137,87 @@ import Testing
         server.signal(SIGTERM)
         #expect(try await server.waitForExit(timeout: .seconds(10)) == 0, "\(server.stderr)")
         upstream.kill()
+    }
+
+    /// #0140: a renewed identity written over the same `.p12` path is picked up by SIGHUP. New
+    /// HTTPS and HTTP/3 handshakes present the new certificate, a TLS connection opened before
+    /// keeps working, an unreadable file keeps the current certificate with a warning. Both
+    /// test identities are imported in memory only; clients pin certificates in-process.
+    @Test(.timeLimit(.minutes(1)))
+    func hangupReloadsATLSIdentityReplacedAtTheSamePath() async throws {
+        let temp = try temporaryDirectory("reload-tls")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try Data("hi\n".utf8).write(to: temp.appending(path: "Public/a.txt"))
+        let first = try TestIdentity.load()
+        let second = try TestIdentity.load(name: "second")
+        let p12 = temp.appending(path: "id.p12")
+        try Data(first.pkcs12).write(to: p12)
+        let config = temp.appending(path: "http-config.json")
+        try Data(#"""
+        {"root": "Public", "drainTimeout": 2,
+         "tls": {"identity": "id.p12", "password": "\#(TestIdentity.password)", "port": 0}, "http3": true}
+        """#.utf8).write(to: config)
+        let server = try ParityTests.launch(["--config", config.path, "--port", "0"])
+        defer { server.kill() }
+        let ports = try await ListenersProcessTests.ports(server, expecting: 3)
+        let https = try #require(ports.https)
+        let h3 = try #require(ports.h3)
+
+        func connectTLS(pinning certificate: [UInt8]) async throws -> TCPTransport {
+            try await TCPTransport.connect(host: "127.0.0.1", port: https,
+                                           tls: TLSClientConfiguration(pinnedCertificate: certificate))
+        }
+        func connectQUIC(pinning certificate: [UInt8]) async throws -> QUICConnection {
+            try await QUICConnection.connect(
+                host: "127.0.0.1", port: h3,
+                configuration: .init(peerVerification: .pinnedCertificate(certificate), connectTimeout: .seconds(5)))
+        }
+        func get(_ transport: TCPTransport) async throws -> String {
+            try await transport.send(ByteBuffer("GET /a.txt HTTP/1.1\r\nHost: localhost\r\n\r\n"), endOfStream: false)
+            var buffer = ByteBuffer()
+            while !buffer.withUnsafeReadableBytes { String(decoding: $0, as: UTF8.self) }.hasSuffix("hi\n") {
+                guard try await transport.receive(into: &buffer, maxLength: 4096) > 0 else { break }
+            }
+            return buffer.withUnsafeReadableBytes { String(decoding: $0, as: UTF8.self) }
+        }
+
+        let before = try await connectTLS(pinning: first.certificateDER)
+        #expect(try await get(before).hasPrefix("HTTP/1.1 200"))
+        let quicBefore = try await connectQUIC(pinning: first.certificateDER)
+        await quicBefore.close(applicationError: 0x100)
+
+        // The renewal: a new identity at the same path, then SIGHUP.
+        try Data(second.pkcs12).write(to: p12, options: .atomic)
+        server.signal(SIGHUP)
+        try await waitForStderr(server, "reloaded the configuration")
+        #expect(server.stderr.contains("TLS identity \(p12.path) reloaded"), "\(server.stderr)")
+        #expect(!server.stderr.contains("needs a restart"), "\(server.stderr)")
+
+        await #expect(throws: (any Error).self) { _ = try await connectTLS(pinning: first.certificateDER) }
+        let after = try await connectTLS(pinning: second.certificateDER)
+        #expect(try await get(after).hasPrefix("HTTP/1.1 200"))
+        let quicAfter = try await connectQUIC(pinning: second.certificateDER)
+        await quicAfter.close(applicationError: 0x100)
+        // The connection from before the reload still serves requests.
+        #expect(try await get(before).hasPrefix("HTTP/1.1 200"))
+
+        // Unchanged file: reported as such.
+        server.signal(SIGHUP)
+        try await waitForStderr(server, "reloaded the configuration", count: 2)
+        #expect(server.stderr.contains("TLS identity \(p12.path) unchanged"), "\(server.stderr)")
+
+        // A broken file: warning, and the current certificate stays.
+        try Data("not pkcs12".utf8).write(to: p12, options: .atomic)
+        server.signal(SIGHUP)
+        try await waitForStderr(server, "reloaded the configuration", count: 3)
+        #expect(server.stderr.contains("warning: reload: cannot load TLS identity \(p12.path)"), "\(server.stderr)")
+        #expect(server.stderr.contains("keeping the current TLS certificate"), "\(server.stderr)")
+        let still = try await connectTLS(pinning: second.certificateDER)
+        #expect(try await get(still).hasPrefix("HTTP/1.1 200"))
+
+        for transport in [before, after, still] { await transport.close(.normal) }
+        server.signal(SIGTERM)
+        #expect(try await server.waitForExit(timeout: .seconds(10)) == 0, "\(server.stderr)")
     }
 
     func waitFor(_ condition: () -> Bool) async throws {

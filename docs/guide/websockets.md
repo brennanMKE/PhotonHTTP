@@ -92,7 +92,7 @@ connection.
 |---|---|
 | `messages` | `AsyncSequence` of `WebSocketMessage`: `.text(String)` (already validated UTF-8) or `.binary(ByteBuffer)`, in order, each a complete (reassembled, inflated) message. Ends when the connection closes. Iterate it from one task at a time |
 | `send(_ message:)`, `send(text:)`, `send(binary:)` | Sends one message as one frame. Suspends while the outbound queue is full. Throws `WebSocketError.closed` once the connection is closing or closed |
-| `ping(_ payload: ByteBuffer = ByteBuffer())` | Sends a ping and waits for the pong with the same payload. Payload at most 125 bytes (`WebSocketError.pingPayloadTooLong`). Throws `.closed` if the connection closes first |
+| `ping(_ payload: ByteBuffer = ByteBuffer(), timeout: Duration = .seconds(10))` | Sends a ping and waits up to `timeout` for the pong with the same payload. Payload at most 125 bytes (`WebSocketError.pingPayloadTooLong`). Throws `.pingTimedOut` when no pong arrives in time (the connection stays open), `.closed` if the connection closes first |
 | `close(code: = .normalClosure, reason: = "")` | Starts the close handshake and returns once the Close frame is queued. The reason is at most 123 UTF-8 bytes (`.closeReasonTooLong`); the code must be sendable (`.invalidCloseCode`, see [close codes](#close-codes)). Closing a connection that is already closing does nothing |
 | `state` | `.open`, `.closing` (we sent Close, waiting for the peer's) or `.closed` |
 | `closeCode`, `closeReason` | What the peer closed with: its code, `1005` for a Close with no code, `1006` if the stream ended without a Close; `nil` while no Close was received |
@@ -134,43 +134,56 @@ bytes.
 ### Ping and pong
 
 Pings from the client are answered automatically with a pong carrying the same payload; your
-handler never sees them. `ping()` is for the server's own liveness checks. It waits for the
-matching pong with no deadline of its own, so put one around it. A heartbeat that closes
-connections whose client stopped answering:
+handler never sees them. The session also keeps the connection alive by itself (see
+[keepalive](#keepalive) below), so most handlers never ping.
+
+`ping()` is for the server's own checks, such as measuring round-trip time. It waits up to
+`timeout` (10 s by default) for the matching pong and throws `WebSocketError.pingTimedOut`
+when none arrives; the connection stays open and what to do next is your call:
 
 ```swift
-let live = WebSocketUpgrade(path: "/live") { socket, _ in
-    try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask {                                   // heartbeat
-            while true {
-                try await Task.sleep(for: .seconds(20))
-                let answered = try await withThrowingTaskGroup(of: Bool.self) { race in
-                    race.addTask { try await socket.ping(); return true }
-                    race.addTask { try await Task.sleep(for: .seconds(10)); return false }
-                    defer { race.cancelAll() }
-                    return try await race.next() ?? false
-                }
-                if !answered {
-                    try await socket.close(code: .policyViolation, reason: "no pong")
-                    return
-                }
-            }
-        }
-        group.addTask {                                   // messages
-            for await message in socket.messages { try await socket.send(message) }
-        }
-        _ = try await group.next()      // messages ended, or the heartbeat gave up or failed
-        group.cancelAll()
-    }
+do {
+    try await socket.ping(timeout: .seconds(5))
+} catch WebSocketError.pingTimedOut {
+    try await socket.close(code: .policyViolation, reason: "no pong")
 }
 ```
 
-`ping()` is cancellable. Two caveats follow from the backpressure design below: the pong is
-only read while the session is reading, so a handler that stops consuming `messages` also
-stops pongs from arriving; and a pong answers every waiting ping with the same payload.
+`ping()` is cancellable, and a pong answers every waiting ping with the same payload. Control
+frames do not wait for your handler to read `messages`: the session answers pings and sees
+pongs and Close frames while messages wait unread, up to the next data frame (see
+[backpressure](#backpressure)).
 
-There is no built-in ping interval or idle timeout for in-process WebSockets: a quiet
-connection stays open until one side closes it. See [timeouts](#timeouts-and-what-ends-a-quiet-connection).
+### Keepalive
+
+`WebSocketConfiguration.keepalive` (on by default) pings a quiet peer and drops one that has
+gone away:
+
+- When nothing has arrived from the peer for `interval` (20 s), the session sends an empty
+  ping.
+- If nothing arrives within `timeout` (10 s) after it (its pong, or any other frame), the peer
+  is presumed gone: the session closes the transport without a close handshake (there is no
+  one to answer), `messages` ends, and `closeCode` reads 1006 (`.abnormalClosure`).
+- A peer that sends anything, data or its own pings, is never pinged. A peer whose messages
+  wait behind a slow handler is not either: it is ahead of you, not gone, and its pong could
+  not be read past its unread messages anyway.
+
+So a vanished peer (a laptop lid closed, a phone that lost coverage, a NAT that forgot the
+mapping) holds its session for at most 30 s, over any protocol. The 20 s interval also keeps
+an HTTP/3 WebSocket below QUIC's 30 s idle timeout, and clients' pongs keep NATs and proxies
+with 60 s idle timeouts from dropping the connection. Browsers and `URLSessionWebSocketTask`
+answer pings without any code on the client side.
+
+```swift
+var configuration = WebSocketConfiguration()
+configuration.keepalive = .init(interval: .seconds(10), timeout: .seconds(5))   // mobile clients
+// configuration.keepalive = nil                                                // off
+WebSocketUpgrade(path: "/live", configuration: configuration) { socket, _ in /* … */ }
+```
+
+Keep `interval` below the shortest idle timeout on the path: QUIC's (`QUICConfiguration.idleTimeoutMilliseconds`,
+30 s by default) for HTTP/3, and any load balancer's in front of the server. Turn it off only
+when the application pings on its own schedule.
 
 ### Closing
 
@@ -192,9 +205,11 @@ Both directions are bounded, so a slow side slows the other instead of growing m
 
 - **Inbound.** The session buffers at most `inboundMessageCapacity` complete messages (default
   1). When the handler is behind, the session stops reading the transport; TCP (or HTTP/2 and
-  QUIC flow control) then pushes back on the client. While reading is paused, nothing else is
-  read either: pings are not answered and a Close is not seen until the handler takes the next
-  message.
+  QUIC flow control) then pushes back on the client. While the queue is full, the session holds
+  one more received message and keeps reading up to the next data frame, so pings are still
+  answered and pongs and a Close are still seen; a Close ends `messages` after the messages
+  already received. What comes after that next data frame waits until the handler takes a
+  message. Keepalive treats this as a live peer.
 - **Outbound.** `send` suspends while `outboundFrameCapacity` frames (default 8) wait for the
   transport. A client that does not read makes your `send` wait; give long-lived senders a
   timeout or drop slow clients.
@@ -251,7 +266,7 @@ let chat = WebSocketUpgrade(
 ```
 
 `broadcast` waits for the slowest member's outbound queue. For rooms with clients you do not
-control, bound it (race each `send` against a timer, as in the heartbeat above) and close
+control, bound it (race each `send` against a timer in a task group) and close
 members that fall behind with `.policyViolation` or `.tryAgainLater`.
 
 ## The opening handshake
@@ -441,6 +456,7 @@ on average):
 | `outboundFrameCapacity` | 8 | Frames queued for sending before `send` suspends |
 | `receiveSize` | 64 KiB | Largest single read from the transport |
 | `compression` | `nil` | permessage-deflate settings; `nil` declines the extension |
+| `keepalive` | 20 s interval, 10 s timeout | A ping after `interval` without anything from the peer; nothing within `timeout` after it closes the connection as 1006. `nil` turns it off. See [keepalive](#keepalive) |
 
 Fragmentation is accepted inbound with any number of fragments, limited only by
 `maxMessageSize`; control frames may arrive between fragments. Outbound messages are never
@@ -454,14 +470,16 @@ to the largest message your protocol needs.
 
 ### Timeouts, and what ends a quiet connection
 
-The `WebSockets` component has no idle timeout, no handshake-to-first-message timeout and no
-automatic ping. What ends a connection that has gone quiet depends on the protocol under it:
+The `WebSockets` component's [keepalive](#keepalive) (on by default) pings a peer that has been
+quiet for 20 s and closes the connection when nothing answers within 10 s, over every protocol.
+A quiet but healthy peer stays connected indefinitely: there is no idle timeout and no
+handshake-to-first-message timeout. What else applies depends on the protocol under it:
 
 | Over | What applies after the handshake |
 |---|---|
-| HTTP/1.1 | None of HTTP/1.1's timeouts: they stop at `101`. A peer that vanishes without a FIN or reset keeps the session until a send fails. Use a heartbeat, or TCP keep-alive on the listener (`TCPConfiguration(keepAlive: .init())`, off by default; 60 s idle, 10 s interval, 6 probes) |
+| HTTP/1.1 | None of HTTP/1.1's timeouts: they stop at `101`. A peer that vanishes without a FIN or reset is found by keepalive. With keepalive off it keeps the session until a send fails, unless TCP keep-alive is on for the listener (`TCPConfiguration(keepAlive: .init())`, off by default; 60 s idle, 10 s interval, 6 probes) |
 | HTTP/2 | The stream is running, so the connection's `idleTimeout` does not fire. Each WebSocket counts against `maxConcurrentStreams` (default 100 per connection). A client that stops reading while the server sends trips `windowStallTimeout` (30 s by default) |
-| HTTP/3 | QUIC's idle timeout (`QUICConfiguration.idleTimeoutMilliseconds`, 30 s by default) closes the connection when no packets flow, so a quiet WebSocket needs pings more often than that |
+| HTTP/3 | QUIC's idle timeout (`QUICConfiguration.idleTimeoutMilliseconds`, 30 s by default) closes the connection when no packets flow. Keepalive's 20 s pings keep a quiet WebSocket under it; with keepalive off, or an `interval` at or above the idle timeout, quiet WebSockets are dropped |
 | Server shutdown | 1001 to every in-process session, then `closeTimeout` for the peer's answer, within the server's `drainTimeout` (10 s by default) |
 
 ## Protocol violations and close codes
@@ -499,7 +517,7 @@ closes the transport.
 | 1002 | `.protocolError` | Protocol violation (table above) |
 | 1003 | `.unsupportedData` | – (for you: wrong message type) |
 | 1005 | `.noStatusReceived` | Never sent; reported in `closeCode` for a Close without a code |
-| 1006 | `.abnormalClosure` | Never sent; reported when the stream ended without a Close |
+| 1006 | `.abnormalClosure` | Never sent; reported when the stream ended without a Close, or keepalive found the peer gone |
 | 1007 | `.invalidFramePayloadData` | Invalid UTF-8 or deflate data |
 | 1008 | `.policyViolation` | – (for you: a generic policy refusal) |
 | 1009 | `.messageTooBig` | Frame or message over the limits |

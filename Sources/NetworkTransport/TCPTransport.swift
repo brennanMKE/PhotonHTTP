@@ -96,7 +96,7 @@ public final class TCPTransport: ByteStreamTransport {
             throw TransportError.failed(code: EINVAL)
         }
         let connection = NWConnection(
-            host: NWEndpoint.Host(host), port: nwPort, using: configuration.makeParameters(tls: tls?.makeOptions()))
+            host: NWEndpoint.Host(host), port: nwPort, using: configuration.makeParameters(tls: try tls?.makeOptions()))
         let transport = TCPTransport(connection: connection, failsWhileWaiting: true)
         transport.startConnection()
         try await transport.waitUntilReady()

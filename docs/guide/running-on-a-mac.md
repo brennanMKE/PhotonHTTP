@@ -197,9 +197,14 @@ chmod 600 certs/example.p12
 `-in` must be the full chain (leaf first, then intermediates). Use Homebrew's
 `/opt/homebrew/bin/openssl` if `/usr/bin/openssl` (LibreSSL) rejects an option.
 
-The identity is read once at startup. After a renewal, regenerate the `.p12` and **restart**
-the server (see [reload](#shutdown-restart-and-reload)); ACME clients have a renew hook for
-that, e.g. `launchctl kickstart -k gui/$(id -u)/com.example.swiftwebserver`.
+After a renewal, write the new `.p12` over the old path (make it in a temporary file, then
+`mv` it into place, so the server never reads half a file) and send **SIGHUP**: the server
+rereads the identity, and new HTTPS and HTTP/3 connections get the new certificate without a
+restart or dropped connections (see [reload](#shutdown-restart-and-reload)). ACME clients have
+a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
+stderr confirms it with `reload: TLS identity PATH reloaded`; if the new file does not load
+(wrong password, not PKCS#12) it prints `warning: reload: cannot load TLS identity …; keeping
+the current TLS certificate` and keeps serving the old one.
 
 ## Binding to all interfaces and the firewall prompt
 
@@ -348,7 +353,12 @@ wrapper write a pid file).
 
   | Reloaded by SIGHUP | Needs a restart (a change is reported and ignored) |
   |---|---|
-  | `root`, `index`, `mimeTypes`, `defaultMimeType`, `blockList`, `blockDotfiles`, `caching`, `errorPages`, `compression`, `hosts`, `auth` (and its credential files), `proxy` and `hosts[].proxy`, `accessLog` (path, format, metrics, flush interval) | `host`, `port`, `transport`, `tls` (including the identity file), `http2`, `http3`, `maxConnections`, `drainTimeout`, `timeouts`, `maxBodySize` |
+  | `root`, `index`, `mimeTypes`, `defaultMimeType`, `blockList`, `blockDotfiles`, `caching`, `errorPages`, `compression`, `hosts`, `auth` (and its credential files), `proxy` and `hosts[].proxy`, `accessLog` (path, format, metrics, flush interval), `tls.identity` and `tls.password` / `tls.passwordEnv` (the identity file is reread on every SIGHUP, so a renewal at the same path is picked up) | `host`, `port`, `transport`, adding or removing `tls`, `tls.port`, `http2`, `http3`, `maxConnections`, `drainTimeout`, `timeouts`, `maxBodySize` |
+
+  The identity reload prints one line: `reload: TLS identity PATH reloaded; new HTTPS and HTTP/3
+  handshakes use the new certificate`, `reload: TLS identity PATH unchanged`, or `warning:
+  reload: cannot load TLS identity PATH: …; keeping the current TLS certificate`. Open
+  connections keep the certificate they negotiated.
 
   A restart-only change prints `warning: reload: port changed; needs a restart, ignored`; the
   rest of the file still reloads. Access log metrics start from zero after a reload (the new
@@ -365,5 +375,5 @@ wrapper write a pid file).
 - `accessLog` to a file, rotated (move it, then SIGHUP); `metrics` behind `auth` or off.
 - `maxConnections`, `maxBodySize` and `timeouts` sized for your traffic; the defaults are
   conservative.
-- LaunchAgent (or LaunchDaemon) with `ExitTimeOut` above `drainTimeout`; renewal hook restarts.
+- LaunchAgent (or LaunchDaemon) with `ExitTimeOut` above `drainTimeout`; renewal hook sends SIGHUP.
 - More for proxied apps: [production checklist](dynamic-sites.md#production-checklist).
