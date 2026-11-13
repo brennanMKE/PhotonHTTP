@@ -143,6 +143,11 @@ public enum MiddlewareChainInspector {
         return protocols
     }
 
+    /// The ``ProtocolResponseObserver``s in the chain, outermost first (#0139).
+    public static func protocolResponseObservers(in root: Any) -> [any ProtocolResponseObserver] {
+        ProtocolResponseObservers(chain: root).observers
+    }
+
     /// True when an element of the chain reads ``RequestContext/startTime``.
     public static func needsRequestStartTime(_ root: Any) -> Bool {
         var found = false

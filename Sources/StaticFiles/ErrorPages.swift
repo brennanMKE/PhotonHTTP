@@ -23,7 +23,17 @@ public import HTTPCore
 /// ```swift
 /// let pages = try ErrorPages(root: "Root/Public", pages: [404: "errors/404.html"])
 /// ```
-public struct ErrorPages: HTTPMiddleware {
+///
+/// ## Responses the protocol writes itself (#0139)
+///
+/// As a ``ProtocolResponseObserver`` the same pages also go on the error responses a protocol
+/// runner writes without the handler chain: a handler that threw (`500`), a request body that
+/// failed (`413`, `400`), a limit hit before the handler ran (`413`, `417`, `431`), a timeout
+/// (`408`) and a malformed head (`400`, `414`, `431`, `501`, `505`). Every one gets its page,
+/// by the same rules (a `HEAD` request gets none); when the request is unknown the page is that
+/// of a `GET`. When the chain has several `ErrorPages` (per virtual host), the outermost one
+/// that has a page for the status styles these responses, whatever the request's host.
+public struct ErrorPages: HTTPMiddleware, ProtocolResponseObserver {
     public enum InitError: Error, Equatable {
         /// The root could not be canonicalized (`errno`).
         case rootUnavailable(errno: Int32)
@@ -136,6 +146,13 @@ public struct ErrorPages: HTTPMiddleware {
                                           next: Next) async throws -> HTTPResponse {
         let method = request.method
         return apply(to: try await next.handle(request, context: context), method: method)
+    }
+
+    // MARK: ProtocolResponseObserver
+
+    public func prepareProtocolResponse(_ response: inout HTTPResponse, cause: ProtocolResponseCause,
+                                        request: HTTPRequest?, context: RequestContext) {
+        response = apply(to: response, method: request?.method ?? .get)
     }
 
     /// `response` with its error page when the rules above call for one, else unchanged.

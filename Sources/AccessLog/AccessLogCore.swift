@@ -115,6 +115,32 @@ final class AccessLogConnection: Sendable {
         }
     }
 
+    /// Formats a line with `-` for the request (none is known); returns a full batch.
+    func appendWithoutRequest(_ fields: AccessLogLineFormatter.Fields, endTicks: UInt64) -> LogBatch? {
+        let format = self.format
+        let batchSize = self.batchSize
+        return log.withLock { state -> LogBatch? in
+            if endTicks >= state.prefixStableUntilTick || state.prefix.isEmpty {
+                refreshPrefix(&state)
+            }
+            let bound = AccessLogLineFormatter.fixedBound + state.prefix.readableBytes
+            if state.bytes.capacity == 0 {
+                if let spare = spares?.spareBuffer() {
+                    state.bytes = spare
+                } else {
+                    state.bytes.reserveCapacity(minimumWritableBytes: Swift.max(bufferCapacity, bound))
+                }
+            }
+            state.bytes.withWriter(reservingCapacity: bound) { writer in
+                state.prefix.withReadableSpan { prefix in
+                    AccessLogLineFormatter.writeLineWithoutRequest(fields, format: format, prefix: prefix, to: &writer)
+                }
+            }
+            state.lines &+= 1
+            return state.bytes.readableBytes >= batchSize ? state.take() : nil
+        }
+    }
+
     /// Re-renders the line prefix when the second changed.
     @inline(never)
     func refreshPrefix(_ state: inout LogBuffer) {
@@ -240,6 +266,29 @@ final class AccessLogCore: Sendable {
                                                    durationNanoseconds: duration, referer: referer,
                                                    userAgent: userAgent)
         if let batch = connection.append(request, fields, endTicks: end.ticks) { submit(batch) }
+    }
+
+    /// Records a response a protocol runner wrote itself (#0139): like ``record(_:context:status:responseBytes:)``
+    /// when the request is known, else a line with `-` for the request.
+    func recordProtocolResponse(status: Int, bodyBytes: Int, request: HTTPRequest?, context: RequestContext) {
+        if let request {
+            record(request, context: context, status: status, responseBytes: bodyBytes)
+            return
+        }
+        let end = MonotonicInstant.now()
+        let connection: AccessLogConnection
+        if let own = context[AccessLogConnectionKey.self], own.settings === settings {
+            connection = own
+        } else {
+            connection = sharedConnection
+        }
+        if metrics != nil {
+            connection.shard.record(status: status, requestBytes: 0, responseBytes: bodyBytes, durationNanoseconds: nil)
+        }
+        guard logs else { return }
+        let fields = AccessLogLineFormatter.Fields(status: status, responseBytes: bodyBytes, durationNanoseconds: nil,
+                                                   referer: nil, userAgent: nil)
+        if let batch = connection.appendWithoutRequest(fields, endTicks: end.ticks) { submit(batch) }
     }
 
     /// Hands a batch to the writer, or drops and counts it if the queue is full. Never waits.

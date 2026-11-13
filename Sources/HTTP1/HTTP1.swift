@@ -83,6 +83,13 @@ public struct HTTP1Configuration: Sendable, Hashable {
 /// - An invalid head is answered with its ``HTTP1ParseError/status`` and `connection: close`.
 /// - A handler that throws gets `500` and `connection: close` (legacy #0009). Responses already
 ///   serialized for earlier pipelined requests are sent first.
+/// - A handler response with `connection: close` (a list element, any case) is written with
+///   `connection: close` and the connection closes after it (#0138); pipelined requests already
+///   read are not answered. The serializer still owns the rest of the framing.
+/// - A response with a field name that is not a token, or a field value or reason phrase with
+///   CR, LF, NUL or another control byte, is not written: it is answered like a throwing
+///   handler, with a bare `500` and `connection: close`, and logged (#0136,
+///   ``HTTPFieldValidation``).
 /// - A receive or send error ends the connection with no further response (legacy #0008).
 /// - End of stream between requests or in the middle of a head closes quietly.
 ///
@@ -229,7 +236,8 @@ public struct HTTP1: ConnectionProtocol {
                             timerRunning = true
                             group.addTask { .timer(await watchdog.runTimer(tick: tick)) }
                         }
-                        let response = timeoutResponse()
+                        let response = timeoutResponse(observers: context.protocolResponseObservers,
+                                                       requestContext: context.requestContext)
                         group.addTask {
                             do {
                                 try await t.send(response, endOfStream: true)
@@ -284,12 +292,26 @@ public struct HTTP1: ConnectionProtocol {
         }
     }
 
-    /// `408 Request Timeout` with `connection: close`.
-    static func timeoutResponse() -> ByteBuffer {
+    /// `408 Request Timeout` with `connection: close`, styled and recorded by the connection's
+    /// ``ProtocolResponseObservers`` (#0139). The request, if any, belongs to the loop, so the
+    /// observers get none.
+    static func timeoutResponse(
+        observers: ProtocolResponseObservers = ProtocolResponseObservers(),
+        requestContext: RequestContext = RequestContext()
+    ) -> ByteBuffer {
         var serializer = HTTP1Serializer()
         var output = ByteBuffer(capacity: 160)
-        serializer.write(HTTPResponse(status: .requestTimeout), into: &output,
+        var context = requestContext
+        context.startTime = nil
+        let response = observers.isEmpty
+            ? HTTPResponse(status: .requestTimeout)
+            : observers.response(status: .requestTimeout, cause: .requestTimeout, request: nil, context: context)
+        serializer.write(response, into: &output,
                          context: HTTP1ResponseContext(requestMethod: .get, persistence: .close))
+        if !observers.isEmpty {
+            observers.written(status: 408, bodyBytes: response.body.knownLength ?? 0, cause: .requestTimeout,
+                              request: nil, context: context)
+        }
         return output
     }
 }
@@ -326,6 +348,8 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
     /// Passed to every request, with a fresh ``RequestContext/startTime`` when `recordsStartTime`.
     var requestContext: RequestContext
     let recordsStartTime: Bool
+    /// Error pages and access logs for the responses this loop writes itself (#0139).
+    let protocolObservers: ProtocolResponseObservers
     let configuration: HTTP1Configuration
     let watchdog: HTTP1Watchdog
     let ticks: HTTP1TimeoutTicks
@@ -357,6 +381,7 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
         self.shutdown = context.shutdown
         self.requestContext = context.requestContext
         self.recordsStartTime = context.recordsRequestStartTime
+        self.protocolObservers = context.protocolResponseObservers
         self.configuration = configuration
         self.watchdog = watchdog
         self.ticks = HTTP1TimeoutTicks(configuration.timeouts)
@@ -434,7 +459,7 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
             case .error(let error):
                 headStarted = false
                 unreadInput = true
-                return await perform(connection.handle(.parseError(error)))
+                return await perform(connection.handle(.parseError(error)), cause: .malformedRequest)
 
             case .complete:
                 headStarted = false
@@ -448,9 +473,10 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
                 let summary = HTTP1Connection.RequestSummary(head: head, fields: storage.fieldsView)
                 let action = connection.handle(.head(summary))
                 guard case .callHandler = action else {
-                    storage.endRequest()
                     if summary.hasBody { unreadInput = true }
-                    return await perform(action)
+                    let ending = await perform(action, cause: .rejectedBeforeHandler, request: head.request(in: storage))
+                    storage.endRequest()
+                    return ending
                 }
                 var request = head.request(in: storage)
                 var reader: HTTP1RequestBodyReader<Transport>?
@@ -476,18 +502,29 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
                 do {
                     response = try await handler.handle(request, context: requestContext)
                 } catch {
-                    storage.endRequest()
                     reader?.end()
                     // Cancelled (drain deadline): stop without answering.
-                    if Task.isCancelled { return ending(connection.handle(.receiveFailed)) }
-                    if let reader {
-                        if reader.transportFailed { return ending(connection.handle(.receiveFailed)) }
-                        if !reader.isFinished { unreadInput = true }
-                        if let failure = Self.bodyFailure(reader.failure ?? (error as? HTTPRequestBodyError)) {
-                            return await perform(connection.handle(.bodyFailed(failure)))
-                        }
+                    if Task.isCancelled {
+                        storage.endRequest()
+                        return ending(connection.handle(.receiveFailed))
                     }
-                    return await perform(connection.handle(.handlerFailed))
+                    if let reader, reader.transportFailed {
+                        storage.endRequest()
+                        return ending(connection.handle(.receiveFailed))
+                    }
+                    var action: HTTP1Connection.Action
+                    var cause = ProtocolResponseCause.handlerFailed
+                    if let reader, !reader.isFinished { unreadInput = true }
+                    if let reader, let failure = Self.bodyFailure(reader.failure ?? (error as? HTTPRequestBodyError)) {
+                        action = connection.handle(.bodyFailed(failure))
+                        cause = .requestBodyFailed
+                    } else {
+                        action = connection.handle(.handlerFailed)
+                    }
+                    // The observers see the request, so it ends after the error is written.
+                    let ending = await perform(action, cause: cause, request: request)
+                    storage.endRequest()
+                    return ending
                 }
                 if let reader {
                     let ending = await settleBody(reader)
@@ -497,8 +534,14 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
                         return ending
                     }
                 }
-                storage.endRequest()
                 reader?.end()
+                // A response that cannot be sent as is becomes a `500` with `close` (#0136).
+                if Self.cannotSend(response) {
+                    let ending = await perform(connection.handle(.handlerFailed), cause: .invalidResponse, request: request)
+                    storage.endRequest()
+                    return ending
+                }
+                storage.endRequest()
                 if let ending = await write(response) { return ending }
             }
         }
@@ -551,21 +594,25 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
 
     /// Serializes one handler response (and sends a file or stream body). Returns an ending
     /// when the connection must stop after it.
+    /// The response was checked with ``cannotSend(_:)``.
     mutating func write(_ response: HTTPResponse) async -> HTTP1Ending? {
         let kind: HTTP1Connection.ResponseKind
         switch response.body {
         case .empty, .bytes, .file:
             kind = .delimited
         case .tunnel:
-            // Only 101 among 1xx switches protocols; any other 1xx cannot carry a tunnel.
-            let code = response.status.code
-            if code < 200 && code != 101 { return await perform(connection.handle(.handlerFailed)) }
             kind = .tunnel
         case .stream(let length, _):
             kind = length == nil ? .unknownLength : .delimited
         }
         // Draining started while the handler ran: this response is the last one.
         if shutdown.isTriggered && !connection.isDraining { _ = connection.handle(.shutdown) }
+        // The handler asked to close after this response (#0138). The presence mask makes the
+        // common case (no `connection` field) one bit test.
+        if kind != .tunnel && response.status.code >= 200 && response.headers.contains(.connection)
+            && response.headers.containsListElement("close", in: .connection) {
+            _ = connection.handle(.closeRequested)
+        }
         guard case .writeResponse(let context) = connection.handle(.response(kind)) else {
             preconditionFailure("HTTP1Connection answers a response with writeResponse")
         }
@@ -610,6 +657,21 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
             return nil
         }
         return await perform(next)
+    }
+
+    /// True when `response` must not be written as is: a name or value that could split the
+    /// head (#0136, checked in release builds too; logged), or a `.tunnel` body on a `1xx`
+    /// other than `101` (only `101` switches protocols).
+    static func cannotSend(_ response: HTTPResponse) -> Bool {
+        if let invalid = HTTPFieldValidation.validationError(response) {
+            HTTPFieldValidation.reportRejectedResponse(invalid, status: response.status, protocolName: "HTTP/1.1")
+            return true
+        }
+        if case .tunnel = response.body {
+            let code = response.status.code
+            return code < 200 && code != 101
+        }
+        return false
     }
 
     /// Sends a file region in slices of at most ``fileSlice`` bytes, each under the send limit.
@@ -670,10 +732,19 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
 
     /// Performs an action that ends the connection: writes the error response if there is one,
     /// flushes everything buffered (half-closing the output), and returns the ending.
-    mutating func perform(_ action: HTTP1Connection.Action) async -> HTTP1Ending {
+    ///
+    /// The error response goes through the connection's ``ProtocolResponseObservers`` (#0139):
+    /// they may give it a body (error pages) and record it (an access log), with `request` when
+    /// the loop has one (it must still be valid) and `cause` saying why.
+    mutating func perform(_ action: HTTP1Connection.Action, cause: ProtocolResponseCause = .handlerFailed,
+                          request: HTTPRequest? = nil) async -> HTTP1Ending {
         var action = action
         if case .writeError(let status, let context) = action {
-            serializer.write(HTTPResponse(status: status), into: &output, context: context)
+            if protocolObservers.isEmpty {
+                serializer.write(HTTPResponse(status: status), into: &output, context: context)
+            } else {
+                writeObservedError(status, context: context, cause: cause, request: request)
+            }
             action = connection.handle(.responseWritten)
         }
         guard case .close(let reason) = action else {
@@ -683,6 +754,22 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
         if reason.isAbortive { return .closed(reason) }
         if let ending = await flush(endOfStream: true, resetPhase: false) { return ending }
         return .closed(reason)
+    }
+
+    /// Serializes an error response built and then recorded by the observers.
+    @inline(never)
+    mutating func writeObservedError(_ status: HTTPStatus, context: HTTP1ResponseContext,
+                                     cause: ProtocolResponseCause, request: HTTPRequest?) {
+        var observed = requestContext
+        // The start time is that of this request only once it reached the handler.
+        if cause == .malformedRequest || cause == .rejectedBeforeHandler || cause == .requestTimeout {
+            observed.startTime = nil
+        }
+        let response = protocolObservers.response(status: status, cause: cause, request: request, context: observed)
+        serializer.write(response, into: &output, context: context)
+        let bodyBytes = context.isHead ? 0 : (response.body.knownLength ?? 0)
+        protocolObservers.written(status: status.code, bodyBytes: bodyBytes, cause: cause, request: request,
+                                  context: observed)
     }
 
     /// Sends ``output`` under the send limit and clears it. Returns an ending if the send
