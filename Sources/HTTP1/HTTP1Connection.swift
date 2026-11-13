@@ -30,6 +30,10 @@ public import HTTPCore
 /// unknown expectation with `417`, and a body that fails while the handler reads it with `413`
 /// or `400` (``Event/bodyFailed(_:)``); each of those closes the connection.
 ///
+/// A handler can end the connection after its response by setting `connection: close`
+/// (#0138): the runner reports ``Event/closeRequested`` and the response says `close`; pipelined
+/// requests already read are not answered.
+///
 /// - ``State/tunnelled`` is the hook for protocol switches (#0108): after a `.tunnel` response
 ///   the byte stream belongs to the tunnel closure and no more HTTP is read.
 public struct HTTP1Connection: Sendable, Hashable {
@@ -198,6 +202,10 @@ public struct HTTP1Connection: Sendable, Hashable {
         case head(RequestSummary)
         /// The buffered head is invalid.
         case parseError(HTTP1ParseError)
+        /// The handler's response carries `connection: close` (RFC 9112 §9.6): it says `close`
+        /// and the connection ends after it. Reported before ``response(_:)``, only for a final,
+        /// non-tunnel response that lists `close`.
+        case closeRequested
         /// The handler returned a response of this kind.
         case response(ResponseKind)
         /// The handler threw, or returned a response this connection cannot send.
@@ -322,6 +330,12 @@ public struct HTTP1Connection: Sendable, Hashable {
             state = .writing(exchange)
             return .writeResponse(HTTP1ResponseContext(requestMethod: exchange.method, persistence: exchange.persistence,
                                                        requestVersion: exchange.version))
+
+        case .closeRequested:
+            guard case .handling(var exchange) = state else { return unexpected(event) }
+            exchange.persistence = .close
+            state = .handling(exchange)
+            return .proceed
 
         case .handlerFailed:
             guard case .handling(let exchange) = state else { return unexpected(event) }

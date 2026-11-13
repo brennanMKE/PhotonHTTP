@@ -963,7 +963,7 @@ where Transport.Stream: ResettableStream {
     ) async -> StreamOutcome {
         var isHead = false
         var isConnect = false
-        let response: HTTPResponse
+        var response: HTTPResponse
         // RFC 9218 (#0107): the `priority` request field, read before the handler ends the
         // request's storage.
         var requested = HTTPPriority()
@@ -979,25 +979,41 @@ where Transport.Stream: ResettableStream {
             do {
                 response = try await handler.handle(request, context: requestContext)
                 tracker.handlerEnded()
+                // A field name or value HTTP/3 forbids (CR, LF, NUL, RFC 9114 §4.2) is never
+                // encoded, in release builds too (#0136): the response becomes a bare `500`.
+                if let invalid = HTTPFieldValidation.validationError(response.headers) {
+                    HTTPFieldValidation.reportRejectedResponse(invalid, status: response.status, protocolName: "HTTP/3")
+                    response = ownResponse(.internalServerError, cause: .invalidResponse, request: request,
+                                           isHead: isHead, context: requestContext)
+                }
                 storage.endRequest()
                 body.expire()
             } catch {
                 tracker.handlerEnded()
-                storage.endRequest()
                 body.expire()
                 // Cancelled (peer abort, timeout, connection closing) or the handler gave up by
                 // itself: `serve` resets the stream with H3_REQUEST_CANCELLED.
-                if Task.isCancelled || error is CancellationError { return .responseEnded(.cancelled) }
+                if Task.isCancelled || error is CancellationError {
+                    storage.endRequest()
+                    return .responseEnded(.cancelled)
+                }
                 if body.isTooLarge {
-                    response = HTTPResponse(status: .contentTooLarge)
+                    response = ownResponse(.contentTooLarge, cause: .requestBodyFailed, request: request,
+                                           isHead: isHead, context: requestContext)
                 } else {
                     // A malformed, truncated or reset body: the body reader's outcome decides.
-                    guard !body.failed else { return .responseEnded(.cancelled) }
-                    response = HTTPResponse(status: .internalServerError)
+                    guard !body.failed else {
+                        storage.endRequest()
+                        return .responseEnded(.cancelled)
+                    }
+                    response = ownResponse(.internalServerError, cause: .handlerFailed, request: request,
+                                           isHead: isHead, context: requestContext)
                 }
+                storage.endRequest()
             }
         } else {
-            response = HTTPResponse(status: rejection)
+            response = ownResponse(rejection, cause: .rejectedBeforeHandler, request: nil, isHead: false,
+                                   context: context.requestContext)
         }
         guard !Task.isCancelled else { return .responseEnded(.cancelled) }
         if isConnect, case .tunnel(let tunnel) = response.body, (200..<300).contains(response.status.code) {
@@ -1013,6 +1029,20 @@ where Transport.Stream: ResettableStream {
             if discarded > configuration.maxUnreadBodySize { return .responded(bodyDrained: false) }
         }
         return .responded(bodyDrained: true)
+    }
+
+    /// A response this stream writes instead of the handler's, styled and recorded by the
+    /// connection's ``ProtocolResponseObservers`` (#0139) while `request` is still valid.
+    func ownResponse(_ status: HTTPStatus, cause: ProtocolResponseCause, request: HTTPRequest?, isHead: Bool,
+                     context requestContext: RequestContext) -> HTTPResponse {
+        let observers = context.protocolResponseObservers
+        guard !observers.isEmpty else { return HTTPResponse(status: status) }
+        var observed = requestContext
+        if request == nil { observed.startTime = nil }
+        let response = observers.response(status: status, cause: cause, request: request, context: observed)
+        observers.written(status: status.code, bodyBytes: isHead ? 0 : (response.body.knownLength ?? 0), cause: cause,
+                          request: request, context: observed)
+        return response
     }
 
     /// Answers an extended CONNECT with `response`'s HEADERS (no FIN) and runs its tunnel over

@@ -144,14 +144,23 @@ import Testing
         #expect(AccessLogLineFormatter.dateLength(.json) == render(0, .json).utf8.count)
     }
 
-    @Test func throwingHandlerIsLoggedAs500() async throws {
+    /// #0139: the middleware leaves a throw to the protocol runner, which logs the response it
+    /// actually sends through ``ProtocolResponseObserver`` (see AccessLogProtocolResponseTests).
+    @Test func throwingHandlerIsLoggedByTheRunnerNotTheMiddleware() async throws {
         let capture = Capture()
         let log = AccessLog(format: .common, destination: capture.destination)
         let connection = openConnection(log)
+        let request = TestRequest("/throw")
         await #expect(throws: Responder.Failure.self) {
-            try await perform(TestRequest("/throw"), through: log, on: connection)
+            try await perform(request, through: log, on: connection)
         }
+        log.protocolResponseWritten(status: 500, bodyBytes: 0, cause: .handlerFailed, request: request.request,
+                                    context: connection.requestContext)
+        // A replaced invalid response was already logged by the middleware: not logged again.
+        log.protocolResponseWritten(status: 500, bodyBytes: 0, cause: .invalidResponse, request: request.request,
+                                    context: connection.requestContext)
         try await drain(log)
+        #expect(capture.lines.count == 1)
         #expect(capture.lines.first?.hasSuffix(#""GET /throw HTTP/1.1" 500 -"#) == true)
     }
 

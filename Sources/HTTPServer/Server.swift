@@ -71,6 +71,9 @@ public final class Server<Listener, Handler: HTTPHandler>: Sendable {
     /// Elements with per-connection state (an access log): the `components:` that are
     /// observers, then those found in the chain.
     let connectionObservers: ConnectionObservers
+    /// Elements that style and record the responses runners write themselves (#0139): the
+    /// `components:` that are observers, then those found in the chain.
+    let protocolResponseObservers: ProtocolResponseObservers
 
     /// Triggers when draining starts; handed to every connection.
     let shutdownSignal = ShutdownSignal()
@@ -117,6 +120,9 @@ public final class Server<Listener, Handler: HTTPHandler>: Sendable {
         self.connectionObservers = ConnectionObservers(
             components.compactMap { $0 as? any ConnectionObserver }
                 + MiddlewareChainInspector.connectionObservers(in: handler))
+        self.protocolResponseObservers = ProtocolResponseObservers(
+            components.compactMap { $0 as? any ProtocolResponseObserver }
+                + MiddlewareChainInspector.protocolResponseObservers(in: handler))
         state.withLock { state in
             state.perListener = entries.map { ListenerStatistics(name: $0.name, kind: $0.kind) }
         }
@@ -383,7 +389,8 @@ public final class Server<Listener, Handler: HTTPHandler>: Sendable {
                          serve: { connection in
                              var context = ConnectionContext(info: listener.connectionInfo(connection),
                                                              shutdown: self.shutdownSignal,
-                                                             recordsRequestStartTime: self.recordsRequestStartTime)
+                                                             recordsRequestStartTime: self.recordsRequestStartTime,
+                                                             protocolResponseObservers: self.protocolResponseObservers)
                              let observers = self.connectionObservers
                              if !observers.isEmpty { observers.connectionWillStart(&context) }
                              await proto.run(connection, handler: self.handler, context: context)
@@ -464,7 +471,8 @@ public final class Server<Listener, Handler: HTTPHandler>: Sendable {
 
     private func serveConnection<T: ByteStreamTransport>(_ transport: T) async {
         var context = ConnectionContext(info: transport.info, shutdown: shutdownSignal,
-                                        recordsRequestStartTime: recordsRequestStartTime)
+                                        recordsRequestStartTime: recordsRequestStartTime,
+                                        protocolResponseObservers: protocolResponseObservers)
         if !connectionObservers.isEmpty { connectionObservers.connectionWillStart(&context) }
         await protocols.serve(transport, handler: handler, context: context)
         await transport.close(.normal)

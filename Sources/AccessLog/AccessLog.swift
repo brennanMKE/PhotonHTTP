@@ -42,11 +42,26 @@ public import HTTPCore
 /// duration (JSON and the latency histogram), and for Combined and JSON the `Referer` and
 /// `User-Agent`. The line is recorded when the handler returns its response, so the duration
 /// is the time to the response, not to the last body byte, and a stream without a declared
-/// length logs `-` bytes. A handler that throws is logged as `500`.
+/// length logs `-` bytes.
+///
+/// ## Responses the protocol writes itself (#0139)
+///
+/// As a ``ProtocolResponseObserver`` it also logs the responses a protocol runner writes without
+/// the handler chain, with the status and body bytes actually sent: a malformed head (`400`,
+/// `414`, `431`, `501`, `505`), a limit hit before the handler ran (`413`, `417`, HTTP/2 and
+/// HTTP/3 field-section limits), a header or body timeout (`408`), and a handler that threw
+/// (`500`, or `413`/`400` when the request body failed). When the request line is unknown (an
+/// unparsable head, a timeout) the line has `-` in its place, as Apache logs a bad request:
+/// `127.0.0.1 - - [10/Oct/2026:13:55:36 +0000] "-" 400 -` (JSON: empty `method`, `path` and
+/// `query`). A handler that throws is therefore logged by the runner, not by this middleware,
+/// so the status is the one sent. A response the runner replaces because it cannot be sent
+/// as is (#0136) keeps the line this middleware logged with the handler's status; the
+/// replacement is reported in the `os` log.
 ///
 /// One `AccessLog` per chain: two would share a context key and the inner one would fall back
 /// to its shared (locked) buffer.
-public struct AccessLog: HTTPMiddleware, RequestStartTimeConsumer, ConnectionObserver, ServerComponent {
+public struct AccessLog: HTTPMiddleware, RequestStartTimeConsumer, ConnectionObserver, ServerComponent,
+    ProtocolResponseObserver {
     @usableFromInline let core: AccessLogCore
 
     /// A log of `format` lines written to `destination`, optionally also recording `metrics`.
@@ -83,15 +98,20 @@ public struct AccessLog: HTTPMiddleware, RequestStartTimeConsumer, ConnectionObs
     @inlinable
     public func handle<Next: HTTPHandler>(_ request: HTTPRequest, context: RequestContext,
                                           next: Next) async throws -> HTTPResponse {
-        let response: HTTPResponse
-        do {
-            response = try await next.handle(request, context: context)
-        } catch {
-            core.record(request, context: context, status: 500, responseBytes: nil)
-            throw error
-        }
+        // A throw is not logged here: the protocol runner logs the response it sends instead
+        // (``protocolResponseWritten(status:bodyBytes:cause:request:context:)``).
+        let response = try await next.handle(request, context: context)
         core.record(request, context: context, status: response.status.code, responseBytes: response.body.knownLength)
         return response
+    }
+
+    // MARK: ProtocolResponseObserver
+
+    public func protocolResponseWritten(status: Int, bodyBytes: Int, cause: ProtocolResponseCause,
+                                        request: HTTPRequest?, context: RequestContext) {
+        // This middleware already logged the handler's response for this request.
+        if cause == .invalidResponse { return }
+        core.recordProtocolResponse(status: status, bodyBytes: bodyBytes, request: request, context: context)
     }
 
     // MARK: ConnectionObserver

@@ -133,6 +133,8 @@ public final class ReloadableHandler<Handler: HTTPHandler>: HTTPHandler, Connect
         @usableFromInline let handler: Handler
         let components: [any ServerComponent]
         let observers: ConnectionObservers
+        /// Error pages and access logs for the responses runners write themselves (#0139).
+        let protocolObservers: ProtocolResponseObservers
         /// Triggers when the generation is retired.
         let retired = ShutdownSignal()
 
@@ -141,6 +143,7 @@ public final class ReloadableHandler<Handler: HTTPHandler>: HTTPHandler, Connect
             self.handler = handler
             self.components = MiddlewareChainInspector.serverComponents(in: handler)
             self.observers = ConnectionObservers(chain: handler)
+            self.protocolObservers = ProtocolResponseObservers(chain: handler)
             super.init()
         }
     }
@@ -227,6 +230,11 @@ public final class ReloadableHandler<Handler: HTTPHandler>: HTTPHandler, Connect
             return generation
         }
         connection.requestContext[ReloadGenerationKey.self] = generation
+        // The connection's runner styles and records its own responses with this chain's
+        // elements (the server cannot see inside a reloadable chain).
+        if !generation.protocolObservers.isEmpty {
+            connection.protocolResponseObservers = generation.protocolObservers
+        }
         generation.observers.connectionWillStart(&connection)
     }
 

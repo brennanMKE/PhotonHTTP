@@ -108,8 +108,14 @@ query or fields. It is valid only while `handle` runs; `request.snapshot()` copi
 
 Every response says `connection: keep-alive` or `connection: close`. The serializer writes that
 field itself from the state machine's decision; a `Connection` field set by the handler is not
-written (except on `1xx` and `.tunnel` responses, so `101` keeps the handler's
-`connection: upgrade`).
+written as is (except on `1xx` and `.tunnel` responses, so `101` keeps the handler's
+`connection: upgrade`). A handler that wants the connection closed after its response (after
+an auth failure, under overload, to rebalance clients) sets `connection: close`: when that
+field lists `close` (any case, any position in the list), the response says `connection: close`
+and the connection closes after it, as RFC 9112 §9.6 describes; pipelined requests already read
+are not answered. Any other `Connection` value is ignored: a handler cannot keep open a
+connection the client or the server decided to close. HTTP/2 and HTTP/3 drop the field, which
+is connection-specific there, and change nothing else.
 
 There is no limit on the number of requests per connection; the idle timeout and
 `maxConnections` bound what idle clients can hold.
@@ -197,8 +203,9 @@ through, so it can state the length a `GET` would have had.
 | Cause | What the client gets |
 |---|---|
 | Request asked for `close`, or HTTP/1.0 without `keep-alive` | The response with `connection: close`, then close |
+| Handler's response lists `close` in its `Connection` field | That response with `connection: close`, then close; pipelined requests already read are not answered |
 | Malformed head | The error status (below) with an empty body and `connection: close` |
-| Handler throws | `500` with `connection: close`. Responses already serialized for earlier pipelined requests go out first |
+| Handler throws, or returns a field that fails validation (see [Request smuggling defences](#request-smuggling-defences)) | `500` with `connection: close`. Responses already serialized for earlier pipelined requests go out first |
 | Client closes between requests or mid-head | Nothing; quiet close |
 | Receive or send fails | Nothing; the connection ends |
 | Server draining | See [Running on a Mac](running-on-a-mac.md#shutdown-restart-and-reload). A connection between requests (idle, or mid-head) closes at once. A request in flight finishes and its response says `close`; pipelined requests not yet started get no response |
@@ -209,9 +216,22 @@ output and reads and discards input for up to `timeouts.linger` (2 s) or 1 MiB
 (`maxLingerSize`). Without this, the client's unread bytes would make the kernel reset the
 connection, and the client could lose the error response.
 
-Error responses for malformed heads, `413` for a `Content-Length` over the limit, `417`, and the
-timeout `408` are written by `HTTP1` itself, without calling the handler chain, so neither
-`ErrorPages` nor `AccessLog` sees them. A handler that throws is also answered by `HTTP1`.
+Error responses for malformed heads, `413` for a `Content-Length` over the limit, `417`, the
+timeout `408`, and the `500` (or `413`/`400` for a failed body) for a handler that throws are
+written by `HTTP1` itself, without calling the handler chain. They still go through the chain's
+`ProtocolResponseObserver`s (#0139), which the server finds at startup like connection
+observers:
+
+- `ErrorPages` gives every one of them its page, by its usual rules (no page for `HEAD`; the
+  page of a `GET` when the head could not be parsed).
+- `AccessLog` logs every one with the status and body bytes sent. When the request line is
+  unknown (an unparsable head, a header timeout) the line has `-` in its place, as Apache logs
+  a bad request: `192.0.2.7 - - [13/Nov/2026:10:00:00 +0000] "-" 400 -`. A handler that throws
+  is logged once, by the runner, with the status actually sent.
+
+A response replaced with `500` because a field would split it (#0136) is the exception: the
+access log keeps the line it wrote when the handler returned (with the handler's status), and
+the replacement is reported in the `os` log.
 
 ## Limits and timeouts
 
@@ -298,10 +318,16 @@ The test-support `ReferenceHTTP1Parser` implements the same rules independently,
 requests split at every byte offset
 ([Tests/HTTP1Tests](../../Tests/HTTP1Tests)).
 
-On the response side, debug builds assert that every field name is a token and every value is
-free of CR, LF and other control bytes. Release builds skip that check on the normal path; a
-handler that copies untrusted bytes into a response field (a `location` built from the request,
-say) must validate them, or use `HTTP1Serializer.writeValidated` if it serializes itself.
+On the response side, every handler response is checked before it is written, in release
+builds too (`HTTPFieldValidation`, #0136): each field name must be a token, and no field value
+or custom reason phrase may hold CR, LF, NUL, another control byte or DEL (a tab is fine). A
+response that fails is never written as is: it is replaced with a bare `500` with
+`connection: close`, like a handler that throws, and an error is logged (`os` log, subsystem
+`SwiftWebServer`, category `HTTP`). So a handler that copies decoded request bytes into a
+`location` cannot split the response, but it gets a `500`; validate or encode such values to
+answer properly. HTTP/2 and HTTP/3 run the same check and answer the stream with a bare `500`.
+Code that serializes responses itself uses `HTTP1Serializer.writeValidated`, which throws
+instead of writing; chunked trailers that fail the check are dropped.
 
 ## Upgrades and tunnels
 

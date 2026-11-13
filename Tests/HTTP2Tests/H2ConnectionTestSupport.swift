@@ -368,13 +368,14 @@ func withH2Connection(
     shutdown: ShutdownSignal = ShutdownSignal(),
     info: ConnectionInfo = ConnectionInfo(),
     server serverTransport: (@Sendable (InMemoryTransport) -> any ByteStreamTransport)? = nil,
+    protocolResponseObservers: ProtocolResponseObservers = ProtocolResponseObservers(),
     _ body: (inout H2Client) async throws -> Void
 ) async throws {
     var serverConfig = InMemoryTransport.Configuration()
     serverConfig.info = info
     let (client, server) = InMemoryTransport.makePair(server: serverConfig)
     let wrapped = serverTransport?(server) ?? server
-    let context = ConnectionContext(info: info, shutdown: shutdown)
+    let context = ConnectionContext(info: info, shutdown: shutdown, protocolResponseObservers: protocolResponseObservers)
     try await withThrowingTaskGroup { group in
         group.addTask {
             await runHTTP2(HTTP2(configuration: configuration), on: wrapped, handler: handler, context: context)

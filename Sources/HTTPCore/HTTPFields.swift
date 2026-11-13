@@ -6,7 +6,9 @@
 /// ``removeAll(keepingCapacity:)`` between responses adds fields without allocating once the
 /// arena and index have grown to fit.
 ///
-/// Values are stored as given; the serializer rejects CR, LF and NUL (#0076).
+/// Values are stored as given. Every protocol checks them before writing a response
+/// (``HTTPFieldValidation``, in release builds too): a response with a name that is not a token
+/// or a value with CR, LF, NUL or another control byte is replaced with a bare `500` (#0136).
 public struct HTTPFields: Sendable, HTTPFieldCollection {
     @usableFromInline var index: HTTPFieldIndex
     @usableFromInline var arena: ByteBuffer
