@@ -1,3 +1,5 @@
+public import HTTPCore
+
 /// Settings a ``Server`` captures once, at construction (docs/ROADMAP.md §3: an immutable
 /// `Sendable` value, never an actor hop per request).
 public struct ServerConfiguration: Sendable, Hashable {
@@ -57,12 +59,53 @@ public enum ServerError: Error, Sendable, Hashable, CustomStringConvertible {
     case alreadyStarted
     /// The server has no protocols to serve connections with.
     case noProtocols
+    /// A restart (#0144) was asked of a server that is not running.
+    case notRunning
+    /// A restart (#0144) was asked while another one was binding.
+    case restartInProgress
 
     public var description: String {
         switch self {
         case .invalidConfiguration(let message): "invalid configuration: \(message)"
         case .alreadyStarted: "the server was already started"
         case .noProtocols: "no connection protocols are registered"
+        case .notRunning: "the server is not running"
+        case .restartInProgress: "a restart is already in progress"
         }
+    }
+}
+
+/// A graceful restart (#0144) failed because a listener of the new generation could not be
+/// made or bound. The running listeners keep serving, except the one named by
+/// ``closedRunningListener`` (a listener that could not share its address had to close before
+/// its replacement could bind).
+public struct ServerRestartError: Error, CustomStringConvertible {
+    /// The new listener's ``ServerListener/name``.
+    public var listener: String
+    /// The address it was to bind, when known.
+    public var address: TransportAddress?
+    /// What the listener (or its `make` closure) threw.
+    public var underlying: any Error
+    /// The name of a running listener closed for the replacement that then failed: it no
+    /// longer serves. `nil` when every running listener still serves.
+    public var closedRunningListener: String?
+
+    public init(listener: String, address: TransportAddress?, underlying: any Error, closedRunningListener: String? = nil) {
+        self.listener = listener
+        self.address = address
+        self.underlying = underlying
+        self.closedRunningListener = closedRunningListener
+    }
+
+    public var description: String {
+        var text = "listener \(listener)"
+        if let address { text += " on \(address)" }
+        text += ": \(underlying)"
+        if let closedRunningListener {
+            text += "; the running listener \(closedRunningListener) had to close first and no longer serves"
+        } else {
+            text += "; the running listeners keep serving"
+        }
+        return text
     }
 }

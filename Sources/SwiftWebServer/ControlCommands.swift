@@ -5,7 +5,7 @@ import NetworkTransport
 import Synchronization
 
 /// The status file of this server process (#0143): written once the listeners are bound,
-/// after every reload and at a clean exit. Only when the settings came from a config file and
+/// after every reload and restart (#0144) and at a clean exit. Only when the settings came from a config file and
 /// `statusFile` is not off. A write that fails prints one warning and the server carries on.
 final class StatusRecorder: Sendable {
     struct State {
@@ -63,6 +63,36 @@ final class StatusRecorder: Sendable {
         }
     }
 
+    /// A graceful restart applied `next` (#0144): the listeners, settings and digests are
+    /// the new ones and nothing waits for a restart.
+    func restarted(next: ServerSettings, sha256: String?, listening: [String]) {
+        update { state in
+            let changed = ServerSettings.changes(from: state.running.settingDigests, to: next.settingDigests).changed
+            state.running = next
+            state.status.settings = next.settingDigests
+            state.status.configSHA256 = sha256
+            state.status.listening = listening
+            state.status.restartRequired = []
+            let now = Date()
+            state.status.restarted = now
+            let summary = changed.isEmpty ? "no key changed" : "changed: \(changed.joined(separator: ", "))"
+            state.status.lastReload = .init(time: now, trigger: "restart", result: .restarted,
+                                            message: "restarted (\(summary)); listening \(listening.joined(separator: ", "))",
+                                            changed: changed)
+            let path = state.status.config.flatMap { next.statusFilePath(configPath: $0) }
+            if path != state.path, let old = state.path { try? FileManager.default.removeItem(atPath: old) }
+            if state.path != nil { state.path = path }
+        }
+    }
+
+    /// A graceful restart failed (#0144); the running configuration stays.
+    func restartFailed(message: String) {
+        update { state in
+            state.status.lastReload = .init(time: Date(), trigger: "restart", result: .failed, message: message,
+                                            restartRequired: state.status.restartRequired)
+        }
+    }
+
     func stopped() {
         update { $0.status.state = .stopped }
     }
@@ -95,14 +125,15 @@ enum ControlCommand: String {
     case check
     case reload
     case status
-    /// Graceful restart, #0144. Named by `check` and `reload` when a restart is needed.
+    /// Graceful restart in process (#0144). Named by `check` and `reload` when a restart is
+    /// needed.
     case restart
 
     static let usage = """
         usage: SwiftWebServer check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
                SwiftWebServer reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
                SwiftWebServer status  [--config FILE] [--json]
-               SwiftWebServer restart [--config FILE]
+               SwiftWebServer restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
 
           check    validate the config (it is loaded and built as a reload would, the TLS identity
                    in memory only) and, when a server runs with it, say which keys would change
@@ -110,14 +141,18 @@ enum ControlCommand: String {
           reload   check, then send SIGHUP to the running server and print the outcome it
                    records in its status file
           status   print the running server's status file
-          restart  graceful restart (not available yet, #0144)
+          restart  check, then send SIGUSR2: the running server reads the whole config, binds
+                   new listeners beside the old ones (same ports, no gap), starts accepting on
+                   them, then drains the old ones for up to drainTimeout. Applies the keys a
+                   reload rejects. Prints the outcome; on failure the old listeners keep serving
 
         The running server is found through its status file: "statusFile" in the config
         (default run/status.json next to it). Without --root/--host/--port, check and reload use
         the overrides the running server was started with.
 
-        Exit status: 0 success; 1 invalid config, no running server, reload failed or timed out;
-        2 usage error; 3 a restart is required (the reload was or would be rejected).
+        Exit status: 0 success; 1 invalid config, no running server, reload or restart failed or
+        timed out; 2 usage error; 3 a restart is required (the reload was or would be rejected).
+        A new binary needs a new process: `launchctl kickstart -k gui/<uid>/LABEL`.
         """
 
     /// Exit status when a restart is required.
@@ -141,7 +176,7 @@ enum ControlCommand: String {
                 json = true
                 arguments.remove(at: index)
             }
-            if self == .reload, let index = arguments.firstIndex(where: { $0 == "--timeout" || $0.hasPrefix("--timeout=") }) {
+            if self == .reload || self == .restart, let index = arguments.firstIndex(where: { $0 == "--timeout" || $0.hasPrefix("--timeout=") }) {
                 let argument = arguments.remove(at: index)
                 let text: String
                 if let equals = argument.firstIndex(of: "=") {
@@ -164,7 +199,7 @@ enum ControlCommand: String {
             case .check: return check(options, environment: environment).exitStatus
             case .reload: return await reload(options, environment: environment, timeout: .milliseconds(Int64(timeout * 1000)))
             case .status: return status(options, environment: environment, json: json)
-            case .restart: return restart()
+            case .restart: return await restart(options, environment: environment, timeout: .milliseconds(Int64(timeout * 1000)))
             }
         } catch {
             printError("\(ServerMain.name) \(rawValue): \(error)\n\n\(Self.usage)")
@@ -278,6 +313,10 @@ enum ControlCommand: String {
                 case .rejected:
                     print("reload rejected, the running configuration stays: \(last.message)")
                     return Self.restartRequiredStatus
+                case .restarted:
+                    // A restart landed first (#0144): it applied the whole file.
+                    print("restarted meanwhile: \(last.message)")
+                    return 0
                 }
             }
             try? await Task.sleep(for: .milliseconds(50))
@@ -317,6 +356,7 @@ enum ControlCommand: String {
             print("last reload: none")
         }
         print("reloads: \(status.reloads)")
+        if let restarted = status.restarted { print("last restart: \(restarted.formatted(time))") }
         if !status.restartRequired.isEmpty {
             print("restart required: \(Self.restartMessage(status.restartRequired))")
         }
@@ -325,14 +365,42 @@ enum ControlCommand: String {
 
     // MARK: restart
 
-    /// The seam for #0144: until graceful restart exists, say how to restart by hand.
-    func restart() -> Int32 {
-        printError("""
-            \(ServerMain.name) restart: graceful restart is not available yet (#0144). Restart the server: \
-            `launchctl kickstart -k gui/$(id -u)/LABEL` under launchd (SIGTERM drains open connections \
-            for up to drainTimeout, then launchd starts it again; new connections are refused briefly), \
-            or stop it with SIGTERM and start it again.
-            """)
+    /// `check`, then SIGUSR2 to the running server, then wait for the restart's outcome in the
+    /// status file (#0144). A config that needs a restart is what this is for, so `check`'s
+    /// exit 3 is no reason to stop; an invalid one is, and nothing is signalled.
+    func restart(_ options: ServerMain.Options, environment: [String: String], timeout: Duration) async -> Int32 {
+        let name = "\(ServerMain.name) restart"
+        let result = check(options, environment: environment)
+        guard result.exitStatus == 0 || result.exitStatus == Self.restartRequiredStatus else {
+            printError("\(name): not restarting: the config is not valid; the running server is unchanged")
+            return result.exitStatus
+        }
+        guard let running = result.running, let statusPath = result.statusPath else {
+            printError("\(name): no running server to restart")
+            return 1
+        }
+        guard kill(running.pid, SIGUSR2) == 0 else {
+            printError("\(name): cannot signal pid \(running.pid): \(String(cString: strerror(errno)))")
+            return 1
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        var seen = running.reloads
+        while clock.now < deadline {
+            if let status = ServerStatus.read(from: statusPath), status.reloads > seen {
+                seen = status.reloads
+                if let last = status.lastReload, last.trigger == "restart" {
+                    if last.result == .restarted {
+                        print("restarted: \(last.message)")
+                        return 0
+                    }
+                    print("restart failed, the running server keeps serving: \(last.message)")
+                    return 1
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        printError("\(name): no result in the status file \(statusPath) after \(timeout)")
         return 1
     }
 }

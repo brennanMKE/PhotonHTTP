@@ -58,6 +58,9 @@ public struct FileFingerprint: Sendable, Hashable {
 /// The reload itself is the closure given to the initializer: it reads and applies the
 /// configuration and returns the plan to watch from then on (the files the running
 /// configuration names). It runs on the reloader's task, never on the request path.
+///
+/// A graceful restart (#0144, ``requestRestart()``) runs on the same task, so reloads and
+/// restarts never overlap.
 public final class ConfigReloader: ServerComponent, Sendable {
     /// Why a reload runs.
     public enum Trigger: Sendable, Equatable {
@@ -91,14 +94,21 @@ public final class ConfigReloader: ServerComponent, Sendable {
         }
     }
 
+    /// What the reloader's task runs next.
+    enum Request: Sendable {
+        case reload(Trigger)
+        case restart
+    }
+
     let reload: @Sendable (Trigger) -> Plan?
+    let restart: (@Sendable () async -> Plan?)?
     let sleep: @Sendable (Duration) async throws -> Void
     let settle: Duration?
     let plan: Mutex<Plan>
     /// The files as the last reload (or the watcher's last trigger) saw them.
     let baseline: Mutex<[String: FileFingerprint?]>
-    let triggers: AsyncStream<Trigger>
-    let continuation: AsyncStream<Trigger>.Continuation
+    let requests: AsyncStream<Request>
+    let continuation: AsyncStream<Request>.Continuation
 
     /// - Parameters:
     ///   - plan: what the running configuration names.
@@ -107,15 +117,19 @@ public final class ConfigReloader: ServerComponent, Sendable {
     ///     `min(interval, 0.5 s)`.
     ///   - reload: reads and applies the configuration, returns the plan to use next (`nil`
     ///     keeps the current one, after a reload that failed or was rejected).
+    ///   - restart: a graceful restart (#0144), run for ``requestRestart()``; returns the plan
+    ///     like `reload`. `nil`: restart requests are ignored.
     public init<C: Clock>(plan: Plan, clock: C = ContinuousClock(), settle: Duration? = nil,
-                          reload: @escaping @Sendable (Trigger) -> Plan?) where C.Duration == Duration {
+                          reload: @escaping @Sendable (Trigger) -> Plan?,
+                          restart: (@Sendable () async -> Plan?)? = nil) where C.Duration == Duration {
         self.reload = reload
+        self.restart = restart
         self.sleep = { try await clock.sleep(for: $0) }
         self.settle = settle
         self.plan = Mutex(plan)
         self.baseline = Mutex(FileFingerprint.snapshot(plan.paths))
         // Low-rate signals (docs/ROADMAP.md §5.4); a burst of requests needs only a few reloads.
-        (triggers, continuation) = AsyncStream.makeStream(of: Trigger.self, bufferingPolicy: .bufferingNewest(4))
+        (requests, continuation) = AsyncStream.makeStream(of: Request.self, bufferingPolicy: .bufferingNewest(4))
     }
 
     /// The plan in use.
@@ -124,7 +138,14 @@ public final class ConfigReloader: ServerComponent, Sendable {
     /// Asks for a reload. Synchronous and non-blocking, so a signal handler can call it; the
     /// reload runs on ``run(server:)``'s task.
     public func requestReload() {
-        continuation.yield(.signal)
+        continuation.yield(.reload(.signal))
+    }
+
+    /// Asks for a graceful restart (#0144). Synchronous and non-blocking like
+    /// ``requestReload()``; the restart runs on ``run(server:)``'s task, after any reload
+    /// before it.
+    public func requestRestart() {
+        continuation.yield(.restart)
     }
 
     /// Reloads on request until cancelled, with the watcher beside it. Requests that arrive
@@ -133,8 +154,14 @@ public final class ConfigReloader: ServerComponent, Sendable {
         await withDiscardingTaskGroup { group in
             group.addTask { await self.watch(draining: server.draining) }
             // Ends when the task is cancelled (the server stopped).
-            for await trigger in triggers where !server.draining.isTriggered {
-                perform(trigger)
+            for await request in requests where !server.draining.isTriggered {
+                switch request {
+                case .reload(let trigger):
+                    perform(trigger)
+                case .restart:
+                    guard let restart else { continue }
+                    await apply { await restart() }
+                }
             }
             group.cancelAll()
         }
@@ -146,7 +173,19 @@ public final class ConfigReloader: ServerComponent, Sendable {
         let current = currentPlan
         let before = FileFingerprint.snapshot(current.paths)
         baseline.withLock { $0 = before }
-        let next = reload(trigger) ?? current
+        adopt(reload(trigger) ?? current, before: before)
+    }
+
+    /// A restart: like a reload, the files are recorded as it reads them.
+    func apply(_ body: () async -> Plan?) async {
+        let current = currentPlan
+        let before = FileFingerprint.snapshot(current.paths)
+        baseline.withLock { $0 = before }
+        adopt(await body() ?? current, before: before)
+    }
+
+    /// Watches `next` from now on.
+    private func adopt(_ next: Plan, before: [String: FileFingerprint?]) {
         plan.withLock { $0 = next }
         let added = next.paths.filter { before[$0] == nil }
         let snapshot = FileFingerprint.snapshot(added)
@@ -180,7 +219,7 @@ public final class ConfigReloader: ServerComponent, Sendable {
                 return changed
             }
             // Empty when a reload in the meantime already read these files.
-            if !changed.isEmpty { continuation.yield(.watch(changed: changed)) }
+            if !changed.isEmpty { continuation.yield(.reload(.watch(changed: changed))) }
         }
     }
 

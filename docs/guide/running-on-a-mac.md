@@ -47,7 +47,7 @@ signals its pid; there is no control socket, so nothing new is reachable over th
 SwiftWebServer check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
 SwiftWebServer reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
 SwiftWebServer status  [--config FILE] [--json]
-SwiftWebServer restart [--config FILE]
+SwiftWebServer restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
 ```
 
 | Command | What it does |
@@ -55,20 +55,21 @@ SwiftWebServer restart [--config FILE]
 | `check` | Loads and builds the config as a reload would (root, error pages, credential files, the TLS identity in memory only) and prints `PATH: valid` or `PATH: invalid: …`. When a server runs with this config, it also prints which keys would change: `can hot-reload: root changed`, `no setting changes` (a reload still rereads the identity and credential files), or `needs a restart: port changed and needs a restart; run `SwiftWebServer restart` to apply them` |
 | `reload` | Runs `check`; when the config is valid and needs no restart, sends SIGHUP and waits (up to `--timeout`, default 10 s) for the server to record the outcome, then prints `reloaded: …`, `reload failed, …` or `reload rejected, …`. It does not signal when the config is invalid or needs a restart |
 | `status` | Prints the status file: state and pid, listening addresses, config path and SHA-256, the last reload (time, `signal` or `watch`, result, message), the reload count and any restart-required keys. `--json` prints the file itself |
-| `restart` | Graceful restart is #0144 and not available yet; it prints how to restart by hand (`launchctl kickstart -k`, or SIGTERM and start again) |
+| `restart` | Runs `check`; when the config is valid (whether or not it needs a restart), sends SIGUSR2 and waits (up to `--timeout`, default 10 s) for the outcome: `restarted (changed: port); listening …` or `restart failed, the running server keeps serving: …`. The [graceful restart](#graceful-restart) happens in the same process, so launchd sees one pid. It does not signal when the config is invalid |
 
-Without `--root`/`--host`/`--port`, `check` and `reload` apply the overrides the running server
-was started with (recorded in the status file). Exit status: `0` success, `1` invalid config,
-no running server, a failed reload or a timeout, `2` usage error, `3` a restart is required
-(the reload was or would be rejected).
+Without `--root`/`--host`/`--port`, `check`, `reload` and `restart` apply the overrides the
+running server was started with (recorded in the status file). Exit status: `0` success, `1`
+invalid config, no running server, a failed reload or restart, or a timeout, `2` usage error,
+`3` a restart is required (the reload was or would be rejected).
 
 The status file is JSON, rewritten atomically (temporary file, then rename) with mode 0600 at
-startup once the listeners are bound, after every reload and at a clean exit
+startup once the listeners are bound, after every reload and restart and at a clean exit
 (`"state": "stopped"`). It holds `pid`, `started`, `config`, `configSHA256` (of the file as
-last loaded), `arguments`, `listening`, `reloads`, `lastReload` (`time`, `trigger`, `result`:
-`reloaded` / `failed` / `rejected`, `message`, `changed`, `restartRequired`),
-`restartRequired` (keys changed in the file but not applied; empty after a successful
-reload) and `settings`: a digest per key of the running values, never the values themselves,
+last loaded), `arguments`, `listening`, `reloads` (reloads and restarts), `lastReload`
+(`time`, `trigger`: `signal` / `watch` / `restart`, `result`: `reloaded` / `failed` /
+`rejected` / `restarted`, `message`, `changed`, `restartRequired`), `restarted` (time of the
+last graceful restart), `restartRequired` (keys changed in the file but not applied; empty
+after a successful reload or restart) and `settings`: a digest per key of the running values, never the values themselves,
 so `check` can compare without the file holding passwords. It is written only when the server
 runs with a config file.
 
@@ -323,9 +324,20 @@ A user LaunchAgent starts the server at login and restarts it if it exits. Save 
 ```bash
 mkdir -p ~/Library/Logs/SwiftWebServer
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.swiftwebserver.plist
-launchctl kickstart -k gui/$(id -u)/com.example.swiftwebserver    # restart
+SwiftWebServer restart --config /Users/me/Sites/example/http-config.json   # apply a config, no gap
+launchctl kickstart -k gui/$(id -u)/com.example.swiftwebserver    # new process (a new binary)
 launchctl bootout gui/$(id -u)/com.example.swiftwebserver         # stop and unload
 ```
+
+- **A config change** that a reload rejects (ports, `tls`, `http2`, `http3`, limits) is applied
+  with `SwiftWebServer restart`: the [graceful restart](#graceful-restart) runs inside the
+  process launchd started, so the job keeps its pid, nothing is refused, and launchd sees no
+  exit.
+- **A new binary** needs a new process: `launchctl kickstart -k` sends SIGTERM (the server
+  drains for up to `drainTimeout`), then launchd starts the new binary. Connections are refused
+  from the moment the old listeners close until the new process has bound them, usually well
+  under a second. Moving listening sockets into a new process (an `exec`-based hand-off) does
+  not fit launchd's model of one job, one pid it started and watches, so it is not done.
 
 - `KeepAlive` with `SuccessfulExit = false` restarts the server after a crash or a startup
   error, but not after a clean stop (exit 0).
@@ -375,6 +387,8 @@ wrapper write a pid file).
 
 ## Shutdown, restart and reload
 
+- **SIGUSR2** starts a [graceful restart](#graceful-restart) (what `SwiftWebServer restart`
+  sends).
 - **SIGINT and SIGTERM** start a graceful shutdown: listeners stop accepting, HTTP/2 and HTTP/3
   connections get `GOAWAY`, proxied WebSocket tunnels are closed at the TCP level (clients see
   1006; in-process `WebSocketUpgrade` sessions in a custom server get Close 1001, see
@@ -416,11 +430,56 @@ wrapper write a pid file).
   `restartRequired` until a reload succeeds. Every later reload is rejected the same way until
   the file is put back or the server restarts. `SwiftWebServer check` tells you before you
   save or signal. Access log metrics start from zero after a reload (the new chain has its own
-  counters). To apply restart-only keys, restart: `SwiftWebServer restart` is the graceful
-  in-process restart of #0144; until it lands, `launchctl kickstart -k …` (SIGTERM drains, then
-  launchd starts the server again, with a brief gap).
+  counters). To apply restart-only keys, run `SwiftWebServer restart` (below).
 - Static file *contents* need no restart: cached entries are re-checked with `stat` at most
   once per second.
+
+### Graceful restart
+
+`SwiftWebServer restart` (or SIGUSR2 to the server's pid) applies a whole config file,
+restart-only keys included, inside the running process (#0144):
+
+1. The server reads, validates and builds the config as at startup (same file and
+   command-line overrides): settings, protocols, the TLS identity (in memory only) and the
+   handler chain. Any failure stops here and nothing changes.
+2. It binds the new listeners **while the old ones still accept**. A port that stays the same
+   is never without a listener:
+   - **Cleartext on BSD sockets** (the default `transport`): the new socket binds the same
+     port with `SO_REUSEPORT`, which the old socket turns on only for the moment of the swap
+     (another program binding the port still gets "address already in use"). The kernel sends
+     new connections to the new socket; connections already queued on the old one are served,
+     then it closes.
+   - **HTTPS and HTTP/3** (Network.framework, which cannot share a port), and cleartext with
+     `"transport": "nw"`: the running listener is handed to the new configuration as it is,
+     when its address and ALPN stay the same. Its certificate comes from the same identity
+     store, so a changed identity file applies to new handshakes as on a reload. Turning
+     `http2` on or off changes the HTTPS listener's ALPN: that listener closes and rebinds,
+     a gap of a few milliseconds on the HTTPS port only.
+   - **A changed port** (`port`, `tls.port`, `http3.port`, or `host`): the new port opens; the
+     old one stops accepting and closes once the swap is done.
+   - A port of `0` that was `0` before keeps the port it was given.
+3. The new listeners start accepting with the new settings (limits, timeouts, `maxBodySize`,
+   protocols, chain).
+4. The old listeners stop accepting. Their connections go on for a second (so a connection
+   accepted just before the swap gets its first request answered), then drain as on SIGTERM:
+   HTTP/2 and HTTP/3 send `GOAWAY`, HTTP/1.1 closes idle keep-alive connections and finishes
+   the request in flight with `connection: close`, tunnels end; whatever is still open after
+   the new `drainTimeout` is cancelled. While the old connections drain, each set has its own
+   `maxConnections`.
+
+If a new listener cannot bind (its port is taken, a bad `host`), the listeners already bound
+for the restart close and **the old ones keep serving**: stderr and `SwiftWebServer restart`
+say `restart failed, the running server keeps serving: listener http on 127.0.0.1:8081:
+Address already in use (errno 48)`, and the status file records `"result": "failed"` with
+`"trigger": "restart"`. Success prints `restarted; listening …` on stderr (not stdout: the
+`listening` lines there are the startup ones) and records `"result": "restarted"`.
+
+Restarts and reloads run one at a time on the same task. A server started without `http3`
+can turn it on by a restart, but its responses only advertise it (`Alt-Svc`) after a process
+restart. A client that keeps a connection idle across the swap may see it closed (as on any
+server closing idle keep-alive connections); HTTP clients retry such requests on a new
+connection.
+
 
 ## A public server checklist
 

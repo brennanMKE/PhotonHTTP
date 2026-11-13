@@ -57,6 +57,41 @@ public struct ServerListener: Sendable {
     public let name: String
     public let kind: Kind
     let storage: Storage
+    /// Where this listener binds, for a graceful restart (``restartable(address:identity:)``).
+    public private(set) var restartAddress: TransportAddress?
+    /// What this listener serves, for a graceful restart (``restartable(address:identity:)``).
+    public private(set) var restartIdentity: String?
+
+    init(name: String, kind: Kind, storage: Storage) {
+        self.name = name
+        self.kind = kind
+        self.storage = storage
+    }
+
+    /// Lets ``Server/restart(configuration:listeners:protocols:)`` keep `address` served with no
+    /// gap (#0144). `address` is where this listener binds (numeric host as the listener
+    /// reports it); a port of 0 matches nothing, so the listener binds afresh. `identity`
+    /// names what it serves, such as `"https"`.
+    ///
+    /// When a restart's new listener names the address a running listener is bound to (same
+    /// ``kind``):
+    /// - if the running one is a ``PortSharingListener`` (BSD sockets), the new one binds
+    ///   beside it with `SO_REUSEPORT` and the old one closes once its queued connections are
+    ///   taken;
+    /// - otherwise (Network.framework TLS and QUIC listeners, which cannot share a port), if
+    ///   both have the same `identity` and ALPN tokens, the running listener is handed to the
+    ///   new generation as it is (this entry's listener is not made);
+    /// - otherwise the old listener closes first and the new one binds after it: a brief gap
+    ///   on that address.
+    ///
+    /// Mark the listeners of the first generation too (their port may be 0): the server wraps
+    /// a listener that cannot share its port at bind time, so it can be handed over later.
+    public func restartable(address: TransportAddress, identity: String) -> ServerListener {
+        var copy = self
+        copy.restartAddress = address.port == 0 ? nil : address
+        copy.restartIdentity = identity
+        return copy
+    }
 
     /// A byte-stream listener created by the caller.
     public static func byteStream<L: TransportListener>(_ listener: L, name: String = "tcp") -> ServerListener {
@@ -76,7 +111,7 @@ public struct ServerListener: Sendable {
     public static func multiplexed<L: MultiplexedTransportListener, P: MultiplexedConnectionProtocol>(
         _ listener: L, protocol: P, name: String = "quic"
     ) -> ServerListener {
-        ServerListener(name: name, kind: .multiplexed, storage: Storage(alpnTokens: P.alpnTokens) { _ in
+        ServerListener(name: name, kind: .multiplexed, storage: Storage(alpnTokens: P.alpnTokens, protocol: `protocol`) { _ in
             .multiplexed(listener, `protocol`)
         })
     }
@@ -86,7 +121,7 @@ public struct ServerListener: Sendable {
     public static func multiplexed<L: MultiplexedTransportListener, P: MultiplexedConnectionProtocol>(
         name: String, protocol: P, _ make: @escaping @Sendable (BindContext) throws -> L
     ) -> ServerListener {
-        ServerListener(name: name, kind: .multiplexed, storage: Storage(alpnTokens: P.alpnTokens) { context in
+        ServerListener(name: name, kind: .multiplexed, storage: Storage(alpnTokens: P.alpnTokens, protocol: `protocol`) { context in
             .multiplexed(try make(context), `protocol`)
         })
     }
@@ -115,11 +150,15 @@ public struct ServerListener: Sendable {
     final class Storage: Sendable {
         /// The ALPN tokens of a multiplexed protocol; `nil` for byte streams (the registry's).
         let alpnTokens: [String]?
+        /// The protocol of a multiplexed listener; `nil` for byte streams.
+        let multiplexedProtocol: (any MultiplexedConnectionProtocol)?
         let make: @Sendable (BindContext) throws -> Bound
         let made = Mutex<Bound?>(nil)
 
-        init(alpnTokens: [String]? = nil, make: @escaping @Sendable (BindContext) throws -> Bound) {
+        init(alpnTokens: [String]? = nil, protocol: (any MultiplexedConnectionProtocol)? = nil,
+             make: @escaping @Sendable (BindContext) throws -> Bound) {
             self.alpnTokens = alpnTokens
+            self.multiplexedProtocol = `protocol`
             self.make = make
         }
 
