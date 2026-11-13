@@ -74,6 +74,10 @@ public struct WSConnection: Sendable {
         case closeTimedOut
         /// The peer ended the byte stream.
         case endOfStream
+        /// A keepalive ping went unanswered (nothing arrived from the peer) within its
+        /// timeout: the peer is presumed gone. The connection closes without a close
+        /// handshake, as 1006 (abnormal closure, RFC 6455 §7.1.5).
+        case pongTimedOut
     }
 
     public enum Action: Sendable, Equatable {
@@ -92,6 +96,10 @@ public struct WSConnection: Sendable {
         case sendClose(code: WebSocketCloseCode?, reason: String, thenCloseTransport: Bool)
         /// The close handshake is over (or abandoned): close the transport.
         case closeTransport(CloseReason)
+        /// ``holdsDataFrames`` is set and the next frame is a data frame: every control frame
+        /// before it has been processed. Call ``process(_:)`` again once the application has
+        /// taken the message it holds; read no more bytes meanwhile.
+        case awaitApplication
         /// Nothing to do.
         case none
     }
@@ -137,6 +145,12 @@ public struct WSConnection: Sendable {
     public private(set) var sentCloseCode: WebSocketCloseCode?
     /// Set when the connection failed because the peer violated the protocol.
     public private(set) var failure: WebSocketCloseCode?
+    /// Set by the session while the application has not taken the last delivered message:
+    /// ``process(_:)`` then stops before the next data frame (``Action/awaitApplication``)
+    /// but keeps answering pings, reporting pongs and handling Close, so control frames do not
+    /// wait for the application's reading pace and nothing more than one frame header is
+    /// read ahead (#0137).
+    public var holdsDataFrames = false
 
     public init(configuration: Configuration = Configuration()) {
         self.init(configuration: configuration, inflater: nil)
@@ -176,7 +190,13 @@ public struct WSConnection: Sendable {
                 } else {
                     result = parser.parse(&input, payloadInto: &message)
                 }
-            case .control, .idle:
+            case .idle:
+                if holdsDataFrames && state == .open && !parser.isInFrame && input.readableBytes > 0
+                    && input.byte(at: input.readerIndex) & 0x08 == 0 {
+                    return .awaitApplication
+                }
+                result = parser.parse(&input, payloadInto: &control)
+            case .control:
                 result = parser.parse(&input, payloadInto: &control)
             case .discard:
                 result = parser.parse(&input, payloadInto: &scratch)
@@ -381,6 +401,11 @@ public struct WSConnection: Sendable {
             state = .closed
             receivedCloseCode = receivedCloseCode ?? .abnormalClosure
             return .closeTransport(.normal)
+        case .pongTimedOut:
+            guard state == .open else { return .none }
+            state = .closed
+            receivedCloseCode = receivedCloseCode ?? .abnormalClosure
+            return .closeTransport(.timeout)
         }
     }
 }
