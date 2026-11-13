@@ -291,3 +291,15 @@ public final class ReloadableHandler<Handler: HTTPHandler>: HTTPHandler, Connect
         }
     }
 }
+
+/// #0135: HTTP/2 and HTTP/3 look for extended CONNECT providers (WebSockets, a proxy with a
+/// `websocket` mount) with ``MiddlewareChainInspector/extendedConnectProtocols(in:)`` when a
+/// connection starts. The wrapper answers for its current chain, so a reload that adds or
+/// removes one is seen by new connections. It is deliberately not a
+/// ``MiddlewareChainContainer``: the server would then also find, and run a second time, the
+/// chain's components and observers that the wrapper already manages per generation.
+extension ReloadableHandler: ExtendedConnectProvider {
+    public var extendedConnectProtocols: [String] {
+        MiddlewareChainInspector.extendedConnectProtocols(in: current)
+    }
+}
