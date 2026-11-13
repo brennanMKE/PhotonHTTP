@@ -74,6 +74,26 @@ import Testing
         #expect(events.all == ["start a", "open a", "start b", "close a", "stop a", "open b", "close b", "stop b"])
     }
 
+    /// Serves `websocket` by extended CONNECT, like WebSocketUpgrade or a proxy's websocket mount.
+    struct WebSocketLike: HTTPHandler, ExtendedConnectProvider {
+        var extendedConnectProtocols: [String] { ["websocket"] }
+        func handle(_ request: HTTPRequest, context: RequestContext) async throws -> HTTPResponse {
+            HTTPResponse(status: .ok)
+        }
+    }
+
+    /// #0135: HTTP/2 and HTTP/3 must still find the chain's extended CONNECT protocols through
+    /// the wrapper, and a reload changes what new connections see.
+    @Test func extendedConnectProtocolsFollowTheCurrentChain() {
+        let reloadable = ReloadableHandler(EitherHandler<WebSocketLike, Probe>.first(WebSocketLike()))
+        #expect(MiddlewareChainInspector.extendedConnectProtocols(in: reloadable) == ["websocket"])
+        reloadable.replace(with: .second(Probe(tag: "b", status: .ok, events: Events())))
+        #expect(MiddlewareChainInspector.extendedConnectProtocols(in: reloadable).isEmpty)
+        // Still one component and one observer: the wrapper, not the chain inside it too.
+        #expect(MiddlewareChainInspector.serverComponents(in: reloadable).count == 1)
+        #expect(MiddlewareChainInspector.connectionObservers(in: reloadable).count == 1)
+    }
+
     @Test func reloadOnlyKeysAreNotReportedAsRestartChanges() {
         let old = ServerSettings()
         var next = old
