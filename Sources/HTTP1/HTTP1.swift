@@ -83,6 +83,9 @@ public struct HTTP1Configuration: Sendable, Hashable {
 /// - An invalid head is answered with its ``HTTP1ParseError/status`` and `connection: close`.
 /// - A handler that throws gets `500` and `connection: close` (legacy #0009). Responses already
 ///   serialized for earlier pipelined requests are sent first.
+/// - A handler response with `connection: close` (a list element, any case) is written with
+///   `connection: close` and the connection closes after it (#0138); pipelined requests already
+///   read are not answered. The serializer still owns the rest of the framing.
 /// - A response with a field name that is not a token, or a field value or reason phrase with
 ///   CR, LF, NUL or another control byte, is not written: it is answered like a throwing
 ///   handler, with a bare `500` and `connection: close`, and logged (#0136,
@@ -576,6 +579,12 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
         }
         // Draining started while the handler ran: this response is the last one.
         if shutdown.isTriggered && !connection.isDraining { _ = connection.handle(.shutdown) }
+        // The handler asked to close after this response (#0138). The presence mask makes the
+        // common case (no `connection` field) one bit test.
+        if kind != .tunnel && response.status.code >= 200 && response.headers.contains(.connection)
+            && response.headers.containsListElement("close", in: .connection) {
+            _ = connection.handle(.closeRequested)
+        }
         guard case .writeResponse(let context) = connection.handle(.response(kind)) else {
             preconditionFailure("HTTP1Connection answers a response with writeResponse")
         }

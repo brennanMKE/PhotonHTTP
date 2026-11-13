@@ -92,7 +92,8 @@ public typealias HTTP1SerializationError = HTTPFieldValidationError
 ///
 /// The serializer owns framing: the handler's `transfer-encoding` and `connection` fields are
 /// not written (except for `1xx` and `.tunnel`), nor is its `content-length` when the
-/// serializer writes its own. A handler `content-length` that disagrees with the body, or
+/// serializer writes its own. A handler that wants the connection closed sets
+/// `connection: close`; the runner turns that into the context's persistence (#0138). A handler `content-length` that disagrees with the body, or
 /// that a `204`, chunked or tunnel response must not carry, is a programming error: debug
 /// builds assert and release builds write the serializer's framing.
 ///

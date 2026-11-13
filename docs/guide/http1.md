@@ -108,8 +108,14 @@ query or fields. It is valid only while `handle` runs; `request.snapshot()` copi
 
 Every response says `connection: keep-alive` or `connection: close`. The serializer writes that
 field itself from the state machine's decision; a `Connection` field set by the handler is not
-written (except on `1xx` and `.tunnel` responses, so `101` keeps the handler's
-`connection: upgrade`).
+written as is (except on `1xx` and `.tunnel` responses, so `101` keeps the handler's
+`connection: upgrade`). A handler that wants the connection closed after its response (after
+an auth failure, under overload, to rebalance clients) sets `connection: close`: when that
+field lists `close` (any case, any position in the list), the response says `connection: close`
+and the connection closes after it, as RFC 9112 §9.6 describes; pipelined requests already read
+are not answered. Any other `Connection` value is ignored: a handler cannot keep open a
+connection the client or the server decided to close. HTTP/2 and HTTP/3 drop the field, which
+is connection-specific there, and change nothing else.
 
 There is no limit on the number of requests per connection; the idle timeout and
 `maxConnections` bound what idle clients can hold.
@@ -197,6 +203,7 @@ through, so it can state the length a `GET` would have had.
 | Cause | What the client gets |
 |---|---|
 | Request asked for `close`, or HTTP/1.0 without `keep-alive` | The response with `connection: close`, then close |
+| Handler's response lists `close` in its `Connection` field | That response with `connection: close`, then close; pipelined requests already read are not answered |
 | Malformed head | The error status (below) with an empty body and `connection: close` |
 | Handler throws, or returns a field that fails validation (see [Request smuggling defences](#request-smuggling-defences)) | `500` with `connection: close`. Responses already serialized for earlier pipelined requests go out first |
 | Client closes between requests or mid-head | Nothing; quiet close |
