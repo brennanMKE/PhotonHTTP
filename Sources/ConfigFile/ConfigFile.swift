@@ -33,6 +33,9 @@ public struct ConfigFile: Sendable {
     /// Values of reserved keys (none at present), as JSON objects, for the components that
     /// will read them.
     public var reserved: [String: ReservedValue]
+    /// SHA-256 (lowercase hex) of the bytes parsed, when read with ``load(path:defaults:)``
+    /// (#0143).
+    public var contentSHA256: String?
 
     /// A reserved key's value, kept as text so it stays `Sendable`.
     public struct ReservedValue: Sendable, Equatable {
@@ -59,7 +62,9 @@ public struct ConfigFile: Sendable {
         }
         var base = defaults
         base.baseDirectory = URL(fileURLWithPath: path).deletingLastPathComponent().path
-        return try parse(data, source: path, defaults: base)
+        var file = try parse(data, source: path, defaults: base)
+        file.contentSHA256 = ServerStatus.sha256(data)
+        return file
     }
 
     /// Parses JSON `data`; `source` names it in messages.
@@ -198,6 +203,17 @@ struct Parser {
                 settings.compression = try compression(value, key)
             case "reload":
                 settings.reload = try reload(value, key)
+            case "statusFile":
+                if value is NSNull {
+                    settings.statusFile = nil
+                } else if Self.isBool(value) {
+                    guard try !bool(value, key) else { throw fail(key, "must be a path, false or null") }
+                    settings.statusFile = nil
+                } else {
+                    let path = try string(value, key)
+                    guard !path.isEmpty else { throw fail(key, "must not be empty") }
+                    settings.statusFile = path
+                }
             case "enableCompression":
                 if object["compression"] != nil {
                     warn("\"enableCompression\" ignored because \"compression\" is set")

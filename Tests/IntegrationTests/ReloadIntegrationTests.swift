@@ -111,13 +111,22 @@ import Testing
                                           timeout: .seconds(40), mergeStandardError: true)
         try await Task.sleep(for: .milliseconds(500))
 
+        // #0143: a restart-only change (host) rejects the whole file, the new mount included.
         try Data("""
         {"port": 0, "reload": false, "host": "127.0.0.2", "root": "Public",
          "proxy": [{"path": "/api", "upstream": "http://127.0.0.1:\(upstreamPort)", "stripPrefix": true}]}
         """.utf8).write(to: config)
         server.signal(SIGHUP)
+        try await waitForStderr(server, "reload rejected, keeping the running configuration")
+        #expect(server.stderr.contains("host changed and needs a restart; run `SwiftWebServer restart`"), "\(server.stderr)")
+        #expect(try await curl(["-o", "/dev/null", "-w", "%{http_code}", "\(base)/api/data.txt"]) == "404")
+
+        try Data("""
+        {"port": 0, "reload": false, "root": "Public",
+         "proxy": [{"path": "/api", "upstream": "http://127.0.0.1:\(upstreamPort)", "stripPrefix": true}]}
+        """.utf8).write(to: config)
+        server.signal(SIGHUP)
         try await waitForStderr(server, "reloaded the configuration")
-        #expect(server.stderr.contains("host changed; needs a restart"), "\(server.stderr)")
         #expect(try await curl(["\(base)/api/data.txt"]) == "upstream\n")
 
         // Invalid: reported, and the reloaded configuration keeps serving.
