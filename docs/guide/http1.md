@@ -198,7 +198,7 @@ through, so it can state the length a `GET` would have had.
 |---|---|
 | Request asked for `close`, or HTTP/1.0 without `keep-alive` | The response with `connection: close`, then close |
 | Malformed head | The error status (below) with an empty body and `connection: close` |
-| Handler throws | `500` with `connection: close`. Responses already serialized for earlier pipelined requests go out first |
+| Handler throws, or returns a field that fails validation (see [Request smuggling defences](#request-smuggling-defences)) | `500` with `connection: close`. Responses already serialized for earlier pipelined requests go out first |
 | Client closes between requests or mid-head | Nothing; quiet close |
 | Receive or send fails | Nothing; the connection ends |
 | Server draining | See [Running on a Mac](running-on-a-mac.md#shutdown-restart-and-reload). A connection between requests (idle, or mid-head) closes at once. A request in flight finishes and its response says `close`; pipelined requests not yet started get no response |
@@ -298,10 +298,16 @@ The test-support `ReferenceHTTP1Parser` implements the same rules independently,
 requests split at every byte offset
 ([Tests/HTTP1Tests](../../Tests/HTTP1Tests)).
 
-On the response side, debug builds assert that every field name is a token and every value is
-free of CR, LF and other control bytes. Release builds skip that check on the normal path; a
-handler that copies untrusted bytes into a response field (a `location` built from the request,
-say) must validate them, or use `HTTP1Serializer.writeValidated` if it serializes itself.
+On the response side, every handler response is checked before it is written, in release
+builds too (`HTTPFieldValidation`, #0136): each field name must be a token, and no field value
+or custom reason phrase may hold CR, LF, NUL, another control byte or DEL (a tab is fine). A
+response that fails is never written as is: it is replaced with a bare `500` with
+`connection: close`, like a handler that throws, and an error is logged (`os` log, subsystem
+`SwiftWebServer`, category `HTTP`). So a handler that copies decoded request bytes into a
+`location` cannot split the response, but it gets a `500`; validate or encode such values to
+answer properly. HTTP/2 and HTTP/3 run the same check and answer the stream with a bare `500`.
+Code that serializes responses itself uses `HTTP1Serializer.writeValidated`, which throws
+instead of writing; chunked trailers that fail the check are dropped.
 
 ## Upgrades and tunnels
 

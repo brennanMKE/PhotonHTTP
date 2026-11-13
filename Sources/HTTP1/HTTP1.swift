@@ -83,6 +83,10 @@ public struct HTTP1Configuration: Sendable, Hashable {
 /// - An invalid head is answered with its ``HTTP1ParseError/status`` and `connection: close`.
 /// - A handler that throws gets `500` and `connection: close` (legacy #0009). Responses already
 ///   serialized for earlier pipelined requests are sent first.
+/// - A response with a field name that is not a token, or a field value or reason phrase with
+///   CR, LF, NUL or another control byte, is not written: it is answered like a throwing
+///   handler, with a bare `500` and `connection: close`, and logged (#0136,
+///   ``HTTPFieldValidation``).
 /// - A receive or send error ends the connection with no further response (legacy #0008).
 /// - End of stream between requests or in the middle of a head closes quietly.
 ///
@@ -552,6 +556,12 @@ struct HTTP1ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPHandle
     /// Serializes one handler response (and sends a file or stream body). Returns an ending
     /// when the connection must stop after it.
     mutating func write(_ response: HTTPResponse) async -> HTTP1Ending? {
+        // A name or value that could split the head is never written, in release builds too
+        // (#0136): the response becomes a bare `500` and the connection closes.
+        if let invalid = HTTPFieldValidation.validationError(response) {
+            HTTPFieldValidation.reportRejectedResponse(invalid, status: response.status, protocolName: "HTTP/1.1")
+            return await perform(connection.handle(.handlerFailed))
+        }
         let kind: HTTP1Connection.ResponseKind
         switch response.body {
         case .empty, .bytes, .file:

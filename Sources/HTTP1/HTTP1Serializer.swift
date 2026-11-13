@@ -55,15 +55,8 @@ public enum HTTP1BodyFraming: Sendable, Hashable {
 
 /// A response that ``HTTP1Serializer/writeValidated(_:into:context:)`` refused because
 /// writing it would let a value inject header lines or end the head early (response
-/// splitting).
-public enum HTTP1SerializationError: Error, Sendable, Hashable {
-    /// The field at `position` has a name that is not an RFC 9110 token.
-    case invalidFieldName(position: Int)
-    /// The field at `position` has a value with CR, LF, NUL or another control byte.
-    case invalidFieldValue(position: Int)
-    /// The custom reason phrase contains a control byte.
-    case invalidReasonPhrase
-}
+/// splitting). The same checks guard HTTP/2 and HTTP/3 (``HTTPFieldValidation``).
+public typealias HTTP1SerializationError = HTTPFieldValidationError
 
 /// Writes HTTP/1.1 response heads (and in-memory content) straight into the connection's
 /// output ``ByteBuffer`` (docs/ROADMAP.md §5.3, §7).
@@ -105,10 +98,12 @@ public enum HTTP1SerializationError: Error, Sendable, Hashable {
 ///
 /// ## Field validation
 ///
-/// Debug builds assert that every name is a token and every value is free of CR, LF, NUL and
-/// other control bytes. Release builds skip that check on ``write(_:into:context:)``; use
-/// ``writeValidated(_:into:context:)`` for responses whose fields carry untrusted bytes (a
-/// `location` built from the request, say), which checks first and writes nothing on failure.
+/// Every name must be a token and every value free of CR, LF, NUL and other control bytes
+/// (``HTTPFieldValidation``). ``write(_:into:context:)`` only asserts that, in debug builds:
+/// its caller checks first. The connection runner (``HTTP1``) checks every handler response in
+/// release builds too and answers an invalid one with a bare `500` and `connection: close`
+/// (#0136). Other callers use ``writeValidated(_:into:context:)``, which checks first and
+/// writes nothing on failure.
 public struct HTTP1Serializer<Clock: WallClock>: Sendable {
     /// The connection's date cache.
     public var dateCache: DateCache<Clock>
@@ -292,37 +287,14 @@ public struct HTTP1Serializer<Clock: WallClock>: Sendable {
     /// The first field or reason phrase that would split the head, or `nil`.
     @inlinable
     public static func validationError(_ response: HTTPResponse) -> HTTP1SerializationError? {
-        let reasonValid = response.status.withReasonPhrase { phrase in
-            for i in phrase.indices where !ASCII.isFieldValueCharacter(phrase[i]) { return false }
-            return true
-        }
-        if !reasonValid { return .invalidReasonPhrase }
-        return response.headers.withFieldStorage { index, arena in
-            validationError(index, arena)
-        }
+        HTTPFieldValidation.validationError(response)
     }
 
     /// The first field in `index` whose name is not a token or whose value has a control
     /// byte, or `nil`. Also used for chunked trailers.
     @inlinable
     public static func validationError(_ index: HTTPFieldIndex, _ arena: ByteBuffer) -> HTTP1SerializationError? {
-        for i in 0..<index.count {
-            let field = index[i]
-            if !field.name.isWellKnown {
-                let nameValid = arena.withSpan(of: field.nameView) { name in
-                    guard !name.isEmpty else { return false }
-                    for j in name.indices where !ASCII.isTokenCharacter(name[j]) { return false }
-                    return true
-                }
-                if !nameValid { return .invalidFieldName(position: i) }
-            }
-            let valueValid = arena.withSpan(of: field.valueView) { value in
-                for j in value.indices where !ASCII.isFieldValueCharacter(value[j]) { return false }
-                return true
-            }
-            if !valueValid { return .invalidFieldValue(position: i) }
-        }
-        return nil
+        HTTPFieldValidation.validationError(index, arena)
     }
 
     /// Debug check: a handler-supplied `content-length` must agree with what the serializer
@@ -391,12 +363,15 @@ public enum HTTP1ChunkedEncoder {
     }
 
     /// Appends the last chunk followed by `trailers` (RFC 9112 §7.1.2) and the blank line.
-    /// Debug builds assert that the trailer names and values are valid.
+    /// Trailers with an invalid name or value (``HTTPFieldValidation``) are not written, in
+    /// release builds: the body ends with the plain last chunk.
     @inlinable
     public static func appendLastChunk(trailers: HTTPFields, into buffer: inout ByteBuffer) {
         trailers.withFieldStorage { index, arena in
-            assert(HTTP1Serializer<SystemWallClock>.validationError(index, arena) == nil,
-                   "HTTP1ChunkedEncoder: a trailer field would split the message")
+            if HTTPFieldValidation.validationError(index, arena) != nil {
+                buffer.append("0\r\n\r\n")
+                return
+            }
             let bound = arena.writerIndex &+ index.count &* (HTTP1Serializer<SystemWallClock>.maximumWellKnownNameLength &+ 4) &+ 5
             buffer.withWriter(reservingCapacity: bound) { writer in
                 writer.append("0\r\n")

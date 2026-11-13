@@ -1053,6 +1053,12 @@ final class HTTP2ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPH
         } else {
             response = HTTPResponse(status: rejection ?? .internalServerError)
         }
+        // A field name or value HTTP/2 forbids (CR, LF, NUL, RFC 9113 §8.2.1) is never encoded,
+        // in release builds too (#0136): the response becomes a bare `500`.
+        if let handled = response, let invalid = HTTPFieldValidation.validationError(handled.headers) {
+            HTTPFieldValidation.reportRejectedResponse(invalid, status: handled.status, protocolName: "HTTP/2")
+            response = HTTPResponse(status: .internalServerError)
+        }
         storage.endRequest()
         if isExtendedConnect, !Task.isCancelled, let tunnelResponse = response,
            case .tunnel(let tunnel) = tunnelResponse.body, (200..<300).contains(tunnelResponse.status.code) {

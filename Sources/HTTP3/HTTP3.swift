@@ -963,7 +963,7 @@ where Transport.Stream: ResettableStream {
     ) async -> StreamOutcome {
         var isHead = false
         var isConnect = false
-        let response: HTTPResponse
+        var response: HTTPResponse
         // RFC 9218 (#0107): the `priority` request field, read before the handler ends the
         // request's storage.
         var requested = HTTPPriority()
@@ -998,6 +998,12 @@ where Transport.Stream: ResettableStream {
             }
         } else {
             response = HTTPResponse(status: rejection)
+        }
+        // A field name or value HTTP/3 forbids (CR, LF, NUL, RFC 9114 §4.2) is never encoded,
+        // in release builds too (#0136): the response becomes a bare `500`.
+        if let invalid = HTTPFieldValidation.validationError(response.headers) {
+            HTTPFieldValidation.reportRejectedResponse(invalid, status: response.status, protocolName: "HTTP/3")
+            response = HTTPResponse(status: .internalServerError)
         }
         guard !Task.isCancelled else { return .responseEnded(.cancelled) }
         if isConnect, case .tunnel(let tunnel) = response.body, (200..<300).contains(response.status.code) {

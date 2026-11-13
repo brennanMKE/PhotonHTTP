@@ -22,6 +22,9 @@ func registerSerializerBenchmarks() {
     register("serialize.200 5-header chunked head", SerializerFixture.chunkedHead)
     register("serialize.304 2-header", SerializerFixture.notModified)
     register("serialize.chunk 9-byte", SerializerFixture.chunk)
+    register("serialize.validate 5-header", SerializerFixture.validateFive)
+    register("serialize.validate 10-header", SerializerFixture.validateTen)
+    register("serialize.validated 10-header 9-byte body", SerializerFixture.validatedTen)
     register("date.clock_gettime", SerializerFixture.clockRead)
     register("date.refresh same second", SerializerFixture.refreshSameSecond)
     register("date.render", SerializerFixture.render)
@@ -67,6 +70,23 @@ private final class SerializerFixture {
 
     func tenHeaders(_ i: Int64) -> Int {
         output.clear()
+        serializer.write(ten, into: &output, context: context)
+        return output.readableBytes
+    }
+
+    /// The release-mode check every runner does before encoding a handler response (#0136).
+    func validateFive(_ i: Int64) -> Int {
+        HTTPFieldValidation.validationError(five) == nil ? 1 : 0
+    }
+
+    func validateTen(_ i: Int64) -> Int {
+        HTTPFieldValidation.validationError(ten) == nil ? 1 : 0
+    }
+
+    /// Check plus serialize: what the HTTP/1.1 runner pays per response.
+    func validatedTen(_ i: Int64) -> Int {
+        output.clear()
+        guard HTTPFieldValidation.validationError(ten) == nil else { return 0 }
         serializer.write(ten, into: &output, context: context)
         return output.readableBytes
     }
