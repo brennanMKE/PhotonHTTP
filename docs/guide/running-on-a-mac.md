@@ -331,7 +331,9 @@ wrapper write a pid file).
 ## Shutdown, restart and reload
 
 - **SIGINT and SIGTERM** start a graceful shutdown: listeners stop accepting, HTTP/2 and HTTP/3
-  connections get `GOAWAY`, WebSocket tunnels get Close 1001, in-flight requests finish for up
+  connections get `GOAWAY`, proxied WebSocket tunnels are closed at the TCP level (clients see
+  1006; in-process `WebSocketUpgrade` sessions in a custom server get Close 1001, see
+  [WebSockets](websockets.md)), in-flight requests finish for up
   to `drainTimeout` seconds, then the rest are cancelled; the access log flushes and the
   process exits 0. A second signal during the drain is harmless. `scripts/sigterm.sh` sends
   SIGTERM to whatever listens on `PORT` (default 8080).
