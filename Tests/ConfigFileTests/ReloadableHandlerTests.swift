@@ -74,6 +74,38 @@ import Testing
         #expect(events.all == ["start a", "open a", "start b", "close a", "stop a", "open b", "close b", "stop b"])
     }
 
+    /// #0142: the request path loads the current generation unretained. Requests on open
+    /// connections while chains are swapped and retired must always find a live chain.
+    @Test(.timeLimit(.minutes(1)))
+    func requestsDuringRepeatedSwapsAlwaysRunOnALiveChain() async throws {
+        let events = Events()
+        let reloadable = ReloadableHandler(Probe(tag: "0", status: .ok, events: events))
+        let storage = HTTPRequestStorage(bufferCapacity: 16, fieldCapacity: 1)
+        let request = HTTPRequest(method: .get, path: .empty, headers: storage.fieldsView)
+        try await withThrowingTaskGroup { group in
+            for _ in 0..<4 {
+                group.addTask {
+                    for _ in 0..<200 {
+                        var connection = ConnectionContext(info: ConnectionInfo())
+                        reloadable.connectionWillStart(&connection)
+                        for _ in 0..<20 {
+                            _ = try await reloadable.handle(request, context: connection.requestContext)
+                        }
+                        reloadable.connectionDidEnd(connection)
+                    }
+                }
+            }
+            group.addTask {
+                for index in 1...500 {
+                    reloadable.replace(with: Probe(tag: "\(index)", status: .ok, events: events))
+                    await Task.yield()
+                }
+            }
+            try await group.waitForAll()
+        }
+        #expect(reloadable.liveHandlers.map(\.tag) == ["500"])
+    }
+
     /// Serves `websocket` by extended CONNECT, like WebSocketUpgrade or a proxy's websocket mount.
     struct WebSocketLike: HTTPHandler, ExtendedConnectProvider {
         var extendedConnectProtocols: [String] { ["websocket"] }

@@ -42,7 +42,8 @@ enum ServerMain {
         on stdout once bound (then "listening HOST:PORT (https)" and "(h3)" lines for the
         other listeners). SIGINT/SIGTERM shut down gracefully. SIGHUP reopens the access log and
         reloads the configuration and the TLS identity file (listener, protocol and limit
-        keys need a restart).
+        keys need a restart). The server also watches the config file and the files it names
+        and reloads when they change ("reload": {"watch": true, "interval": 2}).
         """
 
     static func main() async {
@@ -98,20 +99,26 @@ enum ServerMain {
         return options
     }
 
+    /// The config file the options name: `--config`, else `$ROOT_PATH/http-config.json` or
+    /// `./http-config.json` when it exists, else `nil` (built-in defaults).
+    static func configPath(_ options: Options, environment: [String: String]) -> String? {
+        if let path = options.config { return path }
+        let candidate = ServerSettings.resolve("http-config.json", against: defaultBase(environment))
+        return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
+    }
+
+    /// Legacy compatibility: ROOT_PATH is the directory holding http-config.json.
+    static func defaultBase(_ environment: [String: String]) -> String {
+        environment["ROOT_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? FileManager.default.currentDirectoryPath
+    }
+
     /// The settings: config file, then command-line overrides. Warnings go to stderr.
     static func settings(_ options: Options, environment: [String: String]) throws(ConfigFileError) -> ServerSettings {
         let fileManager = FileManager.default
-        var path = options.config
         var defaults = ServerSettings()
-        if path == nil {
-            // Legacy compatibility: ROOT_PATH is the directory holding http-config.json.
-            let base = environment["ROOT_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? fileManager.currentDirectoryPath
-            defaults.baseDirectory = base
-            let candidate = ServerSettings.resolve("http-config.json", against: base)
-            if fileManager.fileExists(atPath: candidate) { path = candidate }
-        }
+        if options.config == nil { defaults.baseDirectory = defaultBase(environment) }
         var settings = defaults
-        if let path {
+        if let path = configPath(options, environment: environment) {
             let file = try ConfigFile.load(path: path, defaults: defaults)
             for warning in file.warnings { printError("\(name): warning: \(warning)") }
             settings = file.settings
@@ -145,11 +152,13 @@ enum ServerMain {
             // #0140: the HTTPS and HTTP/3 listeners take the identity from this store on every
             // handshake, so SIGHUP can swap in a renewed certificate without a restart.
             let identityStore = try loadIdentity(settings, environment: environment).map(TLSIdentityStore.init)
-            let reload: @Sendable () -> Void = {
+            // #0142: SIGHUP and the file watcher both reload through it, one at a time.
+            let configPath = configPath(options, environment: environment)
+            let reloader = ConfigReloader(plan: settings.watchPlan(configPath: configPath)) { trigger in
                 Self.reload(handler, identity: identityStore, startup: settings, options: options,
-                            environment: environment) { next throws(ConfigFileError) in
+                            environment: environment, trigger: trigger) { next throws(ConfigFileError) in
                     try next.makeHandler(environment: environment)
-                }
+                }.map { $0.watchPlan(configPath: configPath) }
             }
             let configuration = settings.serverConfiguration
             do {
@@ -176,31 +185,38 @@ enum ServerMain {
                     altSvc
                     handler
                 }
-                return await serve(settings, listeners: listeners, protocols: protocols, handler: chain, reload: reload) { addresses, names in
+                return await serve(settings, listeners: listeners, protocols: protocols, handler: chain, reloader: reloader) { addresses, names in
                     if let index = names.firstIndex(of: "h3") { altSvc.advertise(port: addresses[index].port) }
                 }
             }
             #endif
-            return await serve(settings, listeners: listeners, protocols: protocols, handler: handler, reload: reload)
+            return await serve(settings, listeners: listeners, protocols: protocols, handler: handler, reloader: reloader)
         } catch {
             printError("\(name): \(error)")
             return 1
         }
     }
 
-    /// `SIGHUP` (#0127): reads the configuration again (same file and command-line overrides)
-    /// and swaps in a chain built from it for new requests. The access log files are reopened
+    /// `SIGHUP` (#0127) or a changed file (#0142): reads the configuration again (same file
+    /// and command-line overrides) and swaps in a chain built from it for new requests. The access log files are reopened
     /// by their paths either way, for log rotation. Listener, protocol and connection-limit
     /// keys need a restart: a change to them is reported and ignored. A configuration that
     /// does not load or build is reported and the running one stays.
     ///
     /// The TLS identity file is reread too (#0140), even when `tls` is unchanged, since a
     /// renewal usually replaces the file at the same path: see ``reloadIdentity(_:settings:environment:)``.
+    /// Returns the settings now running, or `nil` when the running configuration stays.
     static func reload<H: HTTPHandler>(
         _ handler: ReloadableHandler<H>, identity: TLSIdentityStore?, startup: ServerSettings, options: Options,
-        environment: [String: String], build: (ServerSettings) throws(ConfigFileError) -> H
-    ) {
-        printError("\(name): signal \(SIGHUP), reloading the configuration")
+        environment: [String: String], trigger: ConfigReloader.Trigger,
+        build: (ServerSettings) throws(ConfigFileError) -> H
+    ) -> ServerSettings? {
+        switch trigger {
+        case .signal:
+            printError("\(name): signal \(SIGHUP), reloading the configuration")
+        case .watch(let changed):
+            printError("\(name): \(changed.joined(separator: ", ")) changed, reloading the configuration")
+        }
         do {
             let next = try settings(options, environment: environment)
             try next.validate()
@@ -214,9 +230,11 @@ enum ServerMain {
                 printError("\(name): warning: reload: \(ignored.joined(separator: ", ")) changed; needs a restart, ignored")
             }
             printError("\(name): reloaded the configuration")
+            return next
         } catch {
             handler.reopenAccessLogs()
             printError("\(name): reload failed, keeping the running configuration: \(error)")
+            return nil
         }
     }
 
@@ -303,11 +321,11 @@ enum ServerMain {
     /// before the `listening` lines are printed, with the addresses and listener names.
     static func serve<H: HTTPHandler>(
         _ settings: ServerSettings, listeners: [ServerListener], protocols: [any ConnectionProtocol], handler: H,
-        reload: (@Sendable () -> Void)? = nil,
+        reloader: ConfigReloader? = nil,
         onBound: @escaping @Sendable ([TransportAddress], [String]) -> Void = { _, _ in }
     ) async -> Int32 {
         let server = Server(configuration: settings.serverConfiguration, listeners: listeners,
-                            protocols: protocols,
+                            protocols: protocols, components: reloader.map { [$0] } ?? [],
                             handler: handler)
 
         // Ignore the default actions first, so a signal is never fatal, then route both to a
@@ -324,13 +342,13 @@ enum ServerMain {
             source.resume()
             return source
         }
-        // SIGHUP (#0127): reload on the same serial queue, so reloads never overlap. Ignored
-        // first, so the default action (terminate) never runs.
+        // SIGHUP (#0127): asks the reloader, which runs reloads one at a time with the file
+        // watcher's (#0142). Ignored first, so the default action (terminate) never runs.
         var hangup: (any DispatchSourceSignal)?
-        if let reload {
+        if let reloader {
             signal(SIGHUP, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: queue)
-            source.setEventHandler { if case .running = server.lifecycleState { reload() } }
+            source.setEventHandler { if case .running = server.lifecycleState { reloader.requestReload() } }
             source.resume()
             hangup = source
         }

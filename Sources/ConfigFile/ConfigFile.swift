@@ -196,6 +196,8 @@ struct Parser {
                 settings.http2 = try http2(value, key)
             case "compression":
                 settings.compression = try compression(value, key)
+            case "reload":
+                settings.reload = try reload(value, key)
             case "enableCompression":
                 if object["compression"] != nil {
                     warn("\"enableCompression\" ignored because \"compression\" is set")
@@ -232,6 +234,31 @@ struct Parser {
             }
         }
         settings.maxAge = enabled ? maxAge : nil
+    }
+
+    /// `"reload": {"watch": true, "interval": 2}` (#0142); `true`/`false` sets `watch` alone.
+    mutating func reload(_ value: Any, _ key: String) throws(ConfigFileError) -> ServerSettings.ReloadSettings {
+        var reload = ServerSettings.ReloadSettings()
+        if Self.isBool(value) {
+            reload.watch = try bool(value, key)
+            return reload
+        }
+        let object = try dictionary(value, key, expectation: "must be true, false or {\"watch\", \"interval\"}")
+        for name in object.keys.sorted() {
+            let path = "\(key).\(name)"
+            switch name {
+            case "watch":
+                reload.watch = try bool(object[name]!, path)
+            case "interval":
+                let expectation = "must be a number of seconds from 0.01 to 3600"
+                let seconds = try number(object[name]!, path, expectation: expectation)
+                guard seconds.isFinite, seconds >= 0.01, seconds <= 3600 else { throw fail(path, expectation) }
+                reload.interval = .milliseconds(Int64((seconds * 1000).rounded()))
+            default:
+                warn("unknown key \"\(path)\" ignored")
+            }
+        }
+        return reload
     }
 
     /// `"tls": {"identity": "server.p12", "password": "…" | "passwordEnv": "VAR", "port": 8443}`;

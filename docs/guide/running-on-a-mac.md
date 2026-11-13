@@ -71,6 +71,9 @@ server-sent events.
 | `timeouts.send` | seconds | `30` | Longest wait for the client to accept response bytes |
 | `timeouts.linger` | seconds | `2` | Lingering close after an error response |
 | `drainTimeout` | seconds or `null` | `10` | Graceful stop waits this long for open connections; `null` waits indefinitely (`0` cancels at once) |
+| `reload` | bool or object | `{"watch": true, "interval": 2}` | Hot reload when the config or a file it names changes ([reload](#shutdown-restart-and-reload)). `false` reloads on SIGHUP only |
+| `reload.watch` | bool | `true` | Poll the files with `stat` and reload on a change |
+| `reload.interval` | seconds 0.01–3600 | `2` | Time between polls |
 
 ### Files
 
@@ -200,8 +203,9 @@ chmod 600 certs/example.p12
 After a renewal, write the new `.p12` over the old path (make it in a temporary file, then
 `mv` it into place, so the server never reads half a file) and send **SIGHUP**: the server
 rereads the identity, and new HTTPS and HTTP/3 connections get the new certificate without a
-restart or dropped connections (see [reload](#shutdown-restart-and-reload)). ACME clients have
-a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
+restart or dropped connections (see [reload](#shutdown-restart-and-reload)). With the file
+watcher on (the default, `reload.watch`), the signal is optional: the server sees the new file
+within `reload.interval` and reloads by itself. ACME clients have a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
 stderr confirms it with `reload: TLS identity PATH reloaded`; if the new file does not load
 (wrong password, not PKCS#12) it prints `warning: reload: cannot load TLS identity …; keeping
 the current TLS certificate` and keeps serving the old one.
@@ -342,6 +346,15 @@ wrapper write a pid file).
   to `drainTimeout` seconds, then the rest are cancelled; the access log flushes and the
   process exits 0. A second signal during the drain is harmless. `scripts/sigterm.sh` sends
   SIGTERM to whatever listens on `PORT` (default 8080).
+- **Hot reload, no signal needed** (#0142). The server polls `http-config.json` and the files
+  it names that a reload reads (the TLS identity, `auth` Basic credential files, `errorPages`
+  files) with `stat` every `reload.interval` seconds (default 2). A change of modification
+  time, size or inode (an editor or `tailscale cert`/lego renaming a new file into place)
+  starts a reload once the files have stopped changing for `min(interval, 0.5 s)`, so a file
+  still being written is not read; a file that is malformed when read never replaces the
+  running configuration. stderr says `PATH changed, reloading the configuration`. Reloads,
+  whether from the watcher or SIGHUP, run one at a time, and none start once the server is
+  draining. `"reload": false` turns the watcher off.
 - **SIGHUP reloads** `http-config.json` (the same file and command-line overrides as at
   startup) and reopens the access log file. The new configuration is parsed, validated and
   built first; on success new requests use it, while requests already running finish on the

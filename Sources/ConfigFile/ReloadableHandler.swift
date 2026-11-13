@@ -1,6 +1,6 @@
 public import HTTPCore
 import AccessLog
-import Synchronization
+public import Synchronization
 
 extension ReloadableHandler {
     /// Reopens every live chain's access log file by its path (`SIGHUP`, #0127), so lines
@@ -45,32 +45,20 @@ extension ServerSettings {
 /// The non-generic part of a ``ReloadableHandler`` generation: the write-once link to its
 /// successor. Non-generic so the request path's atomic load and lock are specialized code, not
 /// generic code run through metadata.
+///
+/// The links are not read on the request path (#0142). They keep every newer generation
+/// alive for as long as a connection holds an older one in its context, which is what makes
+/// the request path's unretained load of the current generation safe.
 @usableFromInline
 class ReloadGenerationLink: @unchecked Sendable {
     /// The generation that replaced this one, held strongly; set once.
-    private let successorReference = Mutex<ReloadGenerationLink?>(nil)
-    /// The same, unretained, for the request path: an acquiring load, no lock. Valid because
-    /// ``successorReference`` keeps it alive as long as this link lives. (`AtomicLazyReference`
-    /// measured about 90 ns per load here.)
-    private let successor = Atomic<Unmanaged<ReloadGenerationLink>?>(nil)
+    private let successor = Mutex<ReloadGenerationLink?>(nil)
 
     init() {}
 
     /// Links `next` as this generation's successor. Once only.
     final func link(_ next: ReloadGenerationLink) {
-        successorReference.withLock { $0 = next }
-        successor.store(Unmanaged.passUnretained(next), ordering: .releasing)
-    }
-
-    /// The newest generation reachable through the successor links: one atomic load when no
-    /// swap happened since this one.
-    @usableFromInline
-    final func latest() -> ReloadGenerationLink {
-        var generation = self
-        while let next = generation.successor.load(ordering: .acquiring) {
-            generation = next.takeUnretainedValue()
-        }
-        return generation
+        successor.withLock { $0 = next }
     }
 }
 
@@ -82,13 +70,22 @@ enum ReloadGenerationKey: RequestContextKey {
     @usableFromInline static var defaultValue: ReloadGenerationLink? { nil }
 }
 
-/// The current generation, for requests without connection state.
+/// The current generation.
+///
+/// - ``loadUnretained()`` is one acquiring atomic load and no reference counting: the request
+///   path on a connection that holds a generation (#0142). The pointer stays valid because the
+///   connection's generation is alive (its context holds it) and links strongly to every newer
+///   one, and the current generation is never older than the connection's.
+/// - ``load()`` takes the lock and returns a strong reference: requests without connection
+///   state, which nothing else keeps alive across a swap.
 @usableFromInline
 final class ReloadCurrentGeneration: Sendable {
     let current: Mutex<ReloadGenerationLink>
+    @usableFromInline let unretained: Atomic<Unmanaged<ReloadGenerationLink>>
 
     init(_ generation: ReloadGenerationLink) {
         current = Mutex(generation)
+        unretained = Atomic(Unmanaged.passUnretained(generation))
     }
 
     @usableFromInline
@@ -96,8 +93,16 @@ final class ReloadCurrentGeneration: Sendable {
         current.withLock { $0 }
     }
 
+    @inlinable
+    func loadUnretained() -> Unmanaged<ReloadGenerationLink> {
+        unretained.load(ordering: .acquiring)
+    }
+
+    /// Called with the handler's state lock held, after `generation` was linked from its
+    /// predecessor, so a request that loads it finds it alive.
     func store(_ generation: ReloadGenerationLink) {
         current.withLock { $0 = generation }
+        unretained.store(Unmanaged.passUnretained(generation), ordering: .releasing)
     }
 }
 
@@ -108,11 +113,11 @@ final class ReloadCurrentGeneration: Sendable {
 /// The server sees one handler that is also a ``ConnectionObserver``, a ``ServerComponent``
 /// and a ``RequestStartTimeConsumer``, and forwards each role to the chains inside it:
 ///
-/// - **Requests** run on the chain that is current when the request starts: the generation
-///   the connection was opened with (a lookup in its ``RequestContext``), followed through its
-///   write-once successor links (one atomic load each; one in total until a swap). No lock and
-///   no allocation; only a request without connection state (a runner driven without
-///   ``ConnectionObservers``) takes the lock.
+/// - **Requests** run on the chain that is current when the request starts: one acquiring
+///   atomic load of the current generation, unretained, when the request's connection holds a
+///   generation (#0142; a walk of the context's values, usually one node, tells). No lock, no
+///   reference counting and no allocation; only a request without connection state (a runner
+///   driven without ``ConnectionObservers``) takes the lock.
 /// - **Connections** are opened and closed with the observers (an access log's buffers) of
 ///   the chain that was current when they opened.
 /// - **Components** (an access log's writer, a proxy's pool) of each chain run as child tasks
@@ -209,13 +214,16 @@ public final class ReloadableHandler<Handler: HTTPHandler>: HTTPHandler, Connect
         try await generation(for: context).handler.handle(request, context: context)
     }
 
-    /// The current generation: from the connection's, through the successor links.
+    /// The current generation. On a connection that holds a generation, an unretained atomic
+    /// load (see ``ReloadCurrentGeneration``); otherwise the lock.
     /// Inlinable so the caller specializes the chain's `handle`.
     @inlinable
     func generation(for context: RequestContext) -> Generation {
-        let link = context[ReloadGenerationKey.self]?.latest() ?? currentGeneration.load()
-        // Every link in this handler is one of its generations.
-        return unsafeDowncast(link, to: Generation.self)
+        if context.contains(ReloadGenerationKey.self) {
+            // Every link in this handler is one of its generations.
+            return unsafeDowncast(currentGeneration.loadUnretained().takeUnretainedValue(), to: Generation.self)
+        }
+        return unsafeDowncast(currentGeneration.load(), to: Generation.self)
     }
 
     // MARK: ConnectionObserver
