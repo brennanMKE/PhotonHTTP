@@ -216,9 +216,22 @@ output and reads and discards input for up to `timeouts.linger` (2 s) or 1 MiB
 (`maxLingerSize`). Without this, the client's unread bytes would make the kernel reset the
 connection, and the client could lose the error response.
 
-Error responses for malformed heads, `413` for a `Content-Length` over the limit, `417`, and the
-timeout `408` are written by `HTTP1` itself, without calling the handler chain, so neither
-`ErrorPages` nor `AccessLog` sees them. A handler that throws is also answered by `HTTP1`.
+Error responses for malformed heads, `413` for a `Content-Length` over the limit, `417`, the
+timeout `408`, and the `500` (or `413`/`400` for a failed body) for a handler that throws are
+written by `HTTP1` itself, without calling the handler chain. They still go through the chain's
+`ProtocolResponseObserver`s (#0139), which the server finds at startup like connection
+observers:
+
+- `ErrorPages` gives every one of them its page, by its usual rules (no page for `HEAD`; the
+  page of a `GET` when the head could not be parsed).
+- `AccessLog` logs every one with the status and body bytes sent. When the request line is
+  unknown (an unparsable head, a header timeout) the line has `-` in its place, as Apache logs
+  a bad request: `192.0.2.7 - - [13/Nov/2026:10:00:00 +0000] "-" 400 -`. A handler that throws
+  is logged once, by the runner, with the status actually sent.
+
+A response replaced with `500` because a field would split it (#0136) is the exception: the
+access log keeps the line it wrote when the handler returned (with the handler's status), and
+the replacement is reported in the `os` log.
 
 ## Limits and timeouts
 

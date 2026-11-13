@@ -18,13 +18,15 @@ func withH3Server<H: HTTPHandler, R: Sendable>(
     shutdown: ShutdownSignal = ShutdownSignal(),
     serverTransport: InMemoryMultiplexedTransport.Configuration = InMemoryMultiplexedTransport.Configuration(),
     tracker: H3ConnectionTracker = H3ConnectionTracker(),
+    protocolResponseObservers: ProtocolResponseObservers = ProtocolResponseObservers(),
     _ body: (InMemoryMultiplexedTransport, InMemoryMultiplexedTransport) async throws -> R
 ) async throws -> R {
     let (client, server) = InMemoryMultiplexedTransport.makePair(server: serverTransport)
     return try await withThrowingTaskGroup(of: Void.self) { group in
         group.addTask {
             await HTTP3(configuration: configuration, tracker: tracker).run(
-                server, handler: handler, context: ConnectionContext(info: server.info, shutdown: shutdown))
+                server, handler: handler, context: ConnectionContext(info: server.info, shutdown: shutdown,
+                                                                     protocolResponseObservers: protocolResponseObservers))
         }
         do {
             let result = try await body(client, server)

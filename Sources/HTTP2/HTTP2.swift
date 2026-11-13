@@ -1034,10 +1034,13 @@ final class HTTP2ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPH
         var cancelled = false
         var isHead = false
         var isExtendedConnect = false
+        var requestContext = context.requestContext
+        // Set when this task answers with a response of its own (#0139).
+        var ownCause: ProtocolResponseCause?
+        var ownStatus = HTTPStatus.internalServerError
         if let request {
             isHead = request.method == .head
             isExtendedConnect = request.isExtendedConnect
-            var requestContext = context.requestContext
             if context.recordsRequestStartTime { requestContext.startTime = .now() }
             do {
                 response = try await handler.handle(request, context: requestContext)
@@ -1045,19 +1048,24 @@ final class HTTP2ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPH
                 if Task.isCancelled || error is CancellationError {
                     cancelled = true
                 } else if (error as? HTTPRequestBodyError) == .tooLarge || body?.isTooLarge == true {
-                    response = HTTPResponse(status: .contentTooLarge)
+                    ownCause = .requestBodyFailed
+                    ownStatus = .contentTooLarge
                 } else {
-                    response = HTTPResponse(status: .internalServerError)
+                    ownCause = .handlerFailed
                 }
             }
         } else {
-            response = HTTPResponse(status: rejection ?? .internalServerError)
+            ownCause = .rejectedBeforeHandler
+            ownStatus = rejection ?? .internalServerError
         }
         // A field name or value HTTP/2 forbids (CR, LF, NUL, RFC 9113 §8.2.1) is never encoded,
         // in release builds too (#0136): the response becomes a bare `500`.
         if let handled = response, let invalid = HTTPFieldValidation.validationError(handled.headers) {
             HTTPFieldValidation.reportRejectedResponse(invalid, status: handled.status, protocolName: "HTTP/2")
-            response = HTTPResponse(status: .internalServerError)
+            ownCause = .invalidResponse
+        }
+        if let cause = ownCause {
+            response = ownResponse(ownStatus, cause: cause, request: request, isHead: isHead, context: requestContext)
         }
         storage.endRequest()
         if isExtendedConnect, !Task.isCancelled, let tunnelResponse = response,
@@ -1075,6 +1083,20 @@ final class HTTP2ConnectionDriver<Transport: ByteStreamTransport, Handler: HTTPH
         // Dropping the response here closes a `.file` body's descriptor.
         response = nil
         if cancelled || Task.isCancelled { handle(.sendReset(streamID: id, .cancel)) }
+    }
+
+    /// A response this stream task writes instead of the handler's, styled and recorded by the
+    /// connection's ``ProtocolResponseObservers`` (#0139) while `request` is still valid.
+    func ownResponse(_ status: HTTPStatus, cause: ProtocolResponseCause, request: HTTPRequest?, isHead: Bool,
+                     context requestContext: RequestContext) -> HTTPResponse {
+        let observers = context.protocolResponseObservers
+        guard !observers.isEmpty else { return HTTPResponse(status: status) }
+        var observed = requestContext
+        if request == nil { observed.startTime = nil }
+        let response = observers.response(status: status, cause: cause, request: request, context: observed)
+        observers.written(status: status.code, bodyBytes: isHead ? 0 : (response.body.knownLength ?? 0), cause: cause,
+                          request: request, context: observed)
+        return response
     }
 
     /// Answers an extended CONNECT with `response`'s HEADERS (no END_STREAM) and runs its

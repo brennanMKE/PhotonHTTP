@@ -69,12 +69,17 @@ public struct ConnectionContext: Sendable {
     /// Whether to stamp ``RequestContext/startTime`` on every request. The server sets it when
     /// the handler chain contains a ``RequestStartTimeConsumer`` (#0083).
     public var recordsRequestStartTime: Bool
+    /// Elements that style and record the responses the protocol runner writes without the
+    /// handler chain (error pages, an access log; #0139). The server sets them from the chain.
+    public var protocolResponseObservers: ProtocolResponseObservers
 
     public init(info: ConnectionInfo, shutdown: ShutdownSignal = ShutdownSignal(),
-                recordsRequestStartTime: Bool = false) {
+                recordsRequestStartTime: Bool = false,
+                protocolResponseObservers: ProtocolResponseObservers = ProtocolResponseObservers()) {
         self.requestContext = RequestContext(connection: info)
         self.shutdown = shutdown
         self.recordsRequestStartTime = recordsRequestStartTime
+        self.protocolResponseObservers = protocolResponseObservers
     }
 }
 

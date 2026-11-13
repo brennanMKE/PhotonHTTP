@@ -297,6 +297,36 @@ public enum AccessLogLineFormatter {
         writer.append(UInt8(ascii: "\n"))
     }
 
+    /// Writes one line for a response to an unknown request (an unparsable head, a timeout
+    /// before the head was complete; #0139): `-` in place of the request line, as Apache logs
+    /// a bad request, and `-` for `Referer` and `User-Agent` (Combined). JSON has an empty
+    /// `method`, `path` and `query`. The writer must have ``fixedBound`` plus the prefix free.
+    public static func writeLineWithoutRequest(
+        _ fields: Fields, format: AccessLogFormat, prefix: Span<UInt8>, to writer: inout ByteBuffer.Writer
+    ) {
+        writer.append(contentsOf: prefix)
+        switch format {
+        case .common, .combined:
+            writer.append(UInt8(ascii: "-"), UInt8(ascii: "\""))
+            writer.append(UInt8(ascii: " "))
+            writeStatus(fields.status, to: &writer)
+            if let bytes = fields.responseBytes, bytes > 0 {
+                writer.append(UInt8(ascii: " "))
+                writer.append(decimal: bytes)
+            } else {
+                writer.append(UInt8(ascii: " "), UInt8(ascii: "-"))
+            }
+            if format == .combined { writer.append(" \"-\" \"-\"") }
+        case .json:
+            writer.append("\",\"path\":\"\",\"query\":\"\",\"status\":")
+            writeStatus(fields.status, to: &writer)
+            writer.append(",\"bytes\":")
+            writer.append(decimal: max(fields.responseBytes ?? 0, 0))
+            writer.append(",\"duration_us\":null,\"referer\":null,\"user_agent\":null}")
+        }
+        writer.append(UInt8(ascii: "\n"))
+    }
+
     /// Three digits for the usual 100...999, decimal otherwise.
     @inline(__always)
     static func writeStatus(_ status: Int, to writer: inout ByteBuffer.Writer) {
