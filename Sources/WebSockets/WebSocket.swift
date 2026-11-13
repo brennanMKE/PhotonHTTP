@@ -11,6 +11,9 @@ public enum WebSocketError: Error, Sendable, Hashable {
     case closeReasonTooLong
     /// A ping payload longer than 125 bytes.
     case pingPayloadTooLong
+    /// No pong answered ``WebSocket/ping(_:timeout:)`` within its timeout. The connection
+    /// stays open; the application decides what to do.
+    case pingTimedOut
 }
 
 /// Limits and timeouts of a WebSocket session.
@@ -32,6 +35,27 @@ public struct WebSocketConfiguration: Sendable, Hashable {
     /// otherwise ``WebSocketUpgrade`` accepts a client's offer on these terms. The inflated
     /// size of a received message is bounded by ``maxMessageSize``.
     public var compression: PerMessageDeflate.Configuration?
+    /// Automatic keepalive (#0137): when nothing has arrived from the peer for
+    /// ``Keepalive/interval``, the session sends a ping; when nothing arrives within
+    /// ``Keepalive/timeout`` after it, the peer is presumed gone and the connection closes
+    /// as 1006 (abnormal closure). `nil` turns it off. The default (20 s, 10 s) keeps a quiet
+    /// HTTP/3 stream below QUIC's 30 s idle timeout and drops a vanished peer within 30 s.
+    public var keepalive: Keepalive?
+
+    /// Keepalive timing; see ``WebSocketConfiguration/keepalive``.
+    public struct Keepalive: Sendable, Hashable {
+        /// How long the peer may be silent before the session pings it. Keep it below any
+        /// idle timeout on the path (QUIC's is 30 s by default; proxies and NATs often 60 s).
+        public var interval: Duration
+        /// How long after the ping something (its pong or any frame) must arrive.
+        public var timeout: Duration
+
+        public init(interval: Duration = .seconds(20), timeout: Duration = .seconds(10)) {
+            precondition(interval > .zero && timeout > .zero)
+            self.interval = interval
+            self.timeout = timeout
+        }
+    }
 
     public init(
         maxFrameSize: Int = 16 * 1024 * 1024,
@@ -40,7 +64,8 @@ public struct WebSocketConfiguration: Sendable, Hashable {
         inboundMessageCapacity: Int = 1,
         outboundFrameCapacity: Int = 8,
         receiveSize: Int = 64 * 1024,
-        compression: PerMessageDeflate.Configuration? = nil
+        compression: PerMessageDeflate.Configuration? = nil,
+        keepalive: Keepalive? = Keepalive()
     ) {
         precondition(maxFrameSize >= 125 && maxMessageSize >= 0 && inboundMessageCapacity >= 1
                      && outboundFrameCapacity >= 1 && receiveSize > 0)
@@ -51,6 +76,7 @@ public struct WebSocketConfiguration: Sendable, Hashable {
         self.outboundFrameCapacity = outboundFrameCapacity
         self.receiveSize = receiveSize
         self.compression = compression
+        self.keepalive = keepalive
     }
 }
 
@@ -61,7 +87,11 @@ public struct WebSocketConfiguration: Sendable, Hashable {
 /// ``WebSocketConfiguration/inboundMessageCapacity`` messages, then stops reading the
 /// transport until the application takes one, so a slow reader slows the peer. ``send(_:)``
 /// suspends while ``WebSocketConfiguration/outboundFrameCapacity`` frames wait for the
-/// transport. Pings are answered automatically; ``ping(_:)`` sends one and waits for its pong.
+/// transport. Control frames do not wait for the application: while it has not taken a
+/// message, the session keeps reading up to the next data frame, so pings are answered and
+/// pongs and Close are seen. Pings are answered automatically; ``ping(_:timeout:)`` sends one
+/// and waits for its pong; ``WebSocketConfiguration/keepalive`` pings an idle peer and drops
+/// one that stopped answering.
 ///
 /// The session runs over any ``ByteStreamTransport`` (an HTTP/1.1 connection after `101`
 /// today, an HTTP/2 or HTTP/3 extended CONNECT stream later), started by
@@ -94,11 +124,24 @@ public final class WebSocket: Sendable {
         var answeredPings: Set<UInt64> = []
         var nextPingID: UInt64 = 0
         var readerFinished = false
+        /// A delivered message the inbound queue had no room for; the reader stops before the
+        /// next data frame until the application takes it.
+        var pending: WebSocketMessage?
+        /// The session ended while a message was pending: finish ``inbound`` once it is taken.
+        var finishInboundAfterPending = false
+        /// The application stopped reading ``messages``.
+        var inboundAbandoned = false
+        /// The reader waits for the application (``WSConnection/Action/awaitApplication``).
+        var awaitingApplication = false
+        /// When bytes last arrived from the peer (keepalive).
+        var lastReceive = ContinuousClock.now
     }
 
     let inbound: BoundedAsyncQueue<WebSocketMessage>
     let outbound: BoundedAsyncQueue<Outbound>
     let shared: Mutex<Shared>
+    /// Wakes the reader when the application takes the pending message (or abandons reading).
+    let applicationTook = BoundedAsyncQueue<Void>(capacity: 1)
     /// Triggered when a Close frame is queued: starts the close timer.
     let closeStarted = ShutdownSignal()
     /// Compresses outgoing data messages; used only by the writer task.
@@ -126,18 +169,42 @@ public final class WebSocket: Sendable {
 
     /// Received messages, in order. Iteration ends when the connection closes. Iterate from
     /// one task at a time.
-    public var messages: Messages { Messages(queue: inbound) }
+    public var messages: Messages { Messages(socket: self) }
 
     public struct Messages: AsyncSequence, Sendable {
         public typealias Element = WebSocketMessage
         public typealias Failure = Never
-        let queue: BoundedAsyncQueue<WebSocketMessage>
+        let socket: WebSocket
 
-        public func makeAsyncIterator() -> Iterator { Iterator(queue: queue) }
+        public func makeAsyncIterator() -> Iterator { Iterator(socket: socket) }
 
         public struct Iterator: AsyncIteratorProtocol {
-            let queue: BoundedAsyncQueue<WebSocketMessage>
-            public mutating func next() async -> WebSocketMessage? { await queue.next() }
+            let socket: WebSocket
+            public mutating func next() async -> WebSocketMessage? {
+                let message = await socket.inbound.next()
+                socket.promotePending()
+                return message
+            }
+        }
+    }
+
+    /// Moves the pending message into the room the application just made, and wakes the reader.
+    func promotePending() {
+        let promoted = shared.withLock { shared -> Bool in
+            guard let message = shared.pending, inbound.trySend(message) else { return false }
+            shared.pending = nil
+            if shared.finishInboundAfterPending { inbound.finish() }
+            return true
+        }
+        if promoted { _ = applicationTook.trySend(()) }
+    }
+
+    /// Hands a received message to the application without waiting for it: into the inbound
+    /// queue, or, when that is full, into the single pending slot.
+    func deliver(_ message: WebSocketMessage) {
+        shared.withLock { shared in
+            guard !shared.inboundAbandoned, !inbound.trySend(message) else { return }
+            shared.pending = message
         }
     }
 
@@ -177,10 +244,14 @@ public final class WebSocket: Sendable {
         try await send(.binary(binary))
     }
 
-    /// Sends a ping and waits for a pong with the same payload.
+    /// Sends a ping and waits up to `timeout` for a pong with the same payload.
     ///
-    /// - Throws: ``WebSocketError/closed`` if the connection closes first.
-    public func ping(_ payload: ByteBuffer = ByteBuffer()) async throws {
+    /// The pong is seen even while the application is not reading ``messages``, unless the
+    /// peer sent a data message ahead of it that is still waiting behind an unread one.
+    ///
+    /// - Throws: ``WebSocketError/pingTimedOut`` when no pong arrives in time (the connection
+    ///   stays open), ``WebSocketError/closed`` if the connection closes first.
+    public func ping(_ payload: ByteBuffer = ByteBuffer(), timeout: Duration = .seconds(10)) async throws {
         guard payload.readableBytes <= 125 else { throw WebSocketError.pingPayloadTooLong }
         let signal = ShutdownSignal()
         let id = try shared.withLock { shared throws(WebSocketError) -> UInt64 in
@@ -196,13 +267,23 @@ public final class WebSocket: Sendable {
             _ = shared.withLock { $0.pingWaiters.removeValue(forKey: id) }
             throw error
         }
-        await signal.wait()
+        let timedOut = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await signal.wait(); return false }
+            group.addTask {
+                do { try await Task.sleep(for: timeout) } catch { return false }
+                return true
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
         let answered = shared.withLock { shared -> Bool in
             shared.pingWaiters.removeValue(forKey: id)
             return shared.answeredPings.remove(id) != nil
         }
+        if answered { return }
         try Task.checkCancellation()
-        guard answered else { throw WebSocketError.closed }
+        throw timedOut ? WebSocketError.pingTimedOut : WebSocketError.closed
     }
 
     /// Starts the close handshake with `code` and `reason`. Returns once the Close frame is
@@ -228,7 +309,7 @@ public final class WebSocket: Sendable {
 
     // MARK: Session
 
-    enum Role { case reader, writer, handler, timer, shutdownWatcher }
+    enum Role { case reader, writer, handler, timer, shutdownWatcher, keepalive }
 
     /// Runs a WebSocket session over `transport` (after the handshake) until the connection
     /// closes and `handler` returns, then closes the transport.
@@ -272,6 +353,9 @@ public final class WebSocket: Sendable {
             group.addTask { await socket.readLoop(transport); return .reader }
             group.addTask { await socket.writeLoop(transport); return .writer }
             group.addTask { await socket.closeTimer(transport); return .timer }
+            if let keepalive = configuration.keepalive {
+                group.addTask { await socket.keepaliveLoop(transport, keepalive); return .keepalive }
+            }
             if let shutdown {
                 group.addTask {
                     await shutdown.wait()
@@ -293,7 +377,7 @@ public final class WebSocket: Sendable {
             }
             var running = 3
             while let role = await group.next() {
-                if role != .timer && role != .shutdownWatcher {
+                if role == .reader || role == .writer || role == .handler {
                     running -= 1
                     if running == 0 { group.cancelAll() }
                 }
@@ -305,24 +389,45 @@ public final class WebSocket: Sendable {
     /// The application stopped reading: drop what is buffered and whatever arrives later, so
     /// the reader never waits for it.
     func abandonInbound() {
+        shared.withLock { shared in
+            shared.inboundAbandoned = true
+            shared.pending = nil
+        }
         inbound.finish()
         while inbound.tryNext() != nil {}
+        _ = applicationTook.trySend(())
     }
 
     func readLoop<T: ByteStreamTransport>(_ transport: T) async {
         var buffer = ByteBuffer(capacity: configuration.receiveSize)
         /// After our final Close: discard input until the peer's end of stream.
         var draining = false
+        var received = false
         reading: while true {
             if !draining {
                 processing: while true {
-                    let action = shared.withLock { $0.connection.process(&buffer) }
+                    let action = shared.withLock { shared in
+                        if received { shared.lastReceive = .now }
+                        shared.connection.holdsDataFrames = shared.pending != nil
+                        return shared.connection.process(&buffer)
+                    }
+                    received = false
                     switch action {
                     case .needMoreBytes, .none:
                         break processing
                     case .deliver(let message):
-                        // Suspends while the application is behind: no more reads until it catches up.
-                        try? await inbound.send(message)
+                        deliver(message)
+                    case .awaitApplication:
+                        // The application is behind and a data frame is next: read nothing more
+                        // until it takes the pending message (backpressure on the peer).
+                        shared.withLock { $0.awaitingApplication = true }
+                        while shared.withLock({ $0.pending != nil }) {
+                            guard await applicationTook.next() != nil else {
+                                shared.withLock { $0.awaitingApplication = false }
+                                break reading
+                            }
+                        }
+                        shared.withLock { $0.awaitingApplication = false }
                     case .sendPong(let payload):
                         try? await outbound.send(Outbound(opcode: .pong, payload: payload))
                     case .receivedPong(let payload):
@@ -353,6 +458,7 @@ public final class WebSocket: Sendable {
                 _ = shared.withLock { $0.connection.handle(.endOfStream) }
                 break reading
             }
+            received = true
         }
         shared.withLock { $0.readerFinished = true }
         endApplicationSide()
@@ -361,7 +467,14 @@ public final class WebSocket: Sendable {
     /// Ends ``messages``, stops accepting frames once the queued ones are written, and fails
     /// waiting pings.
     func endApplicationSide() {
-        inbound.finish()
+        shared.withLock { shared in
+            // A pending message is still delivered; ``messages`` ends after it.
+            if shared.pending != nil {
+                shared.finishInboundAfterPending = true
+            } else {
+                inbound.finish()
+            }
+        }
         outbound.finish()
         let waiters = shared.withLock { shared -> [PingWaiter] in
             defer { shared.pingWaiters = [:] }
@@ -429,6 +542,53 @@ public final class WebSocket: Sendable {
         outbound.finish()
         while outbound.tryNext() != nil {}
         await transport.close(.abort)
+    }
+
+    /// Automatic keepalive: pings a peer that has been silent for `keepalive.interval`, and
+    /// closes the connection (1006, no close handshake) when nothing arrives within
+    /// `keepalive.timeout` of the ping. A reader waiting for the application counts as
+    /// activity: the peer is ahead of us, not gone. Ends when the connection leaves `open`.
+    func keepaliveLoop<T: ByteStreamTransport>(_ transport: T, _ keepalive: WebSocketConfiguration.Keepalive) async {
+        while !Task.isCancelled {
+            let (open, lastReceive, waiting) = shared.withLock { shared in
+                (shared.connection.state == .open && !shared.readerFinished, shared.lastReceive,
+                 shared.awaitingApplication)
+            }
+            guard open else { return }
+            let now = ContinuousClock.now
+            let due = waiting ? now + keepalive.interval : lastReceive + keepalive.interval
+            if due > now {
+                do { try await Task.sleep(until: due, clock: .continuous) } catch { return }
+                continue
+            }
+            let sentAt = ContinuousClock.now
+            let deadline = sentAt + keepalive.timeout
+            await sendKeepalivePing(until: deadline)
+            do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
+            let timedOut = shared.withLock { shared -> Bool in
+                if shared.lastReceive > sentAt || shared.awaitingApplication { return false }
+                return shared.connection.handle(.pongTimedOut) != .none
+            }
+            if timedOut {
+                endApplicationSide()
+                await transport.close(.timeout)
+                return
+            }
+        }
+    }
+
+    /// Queues an empty ping; waits for room in the outbound queue no later than `deadline`.
+    func sendKeepalivePing(until deadline: ContinuousClock.Instant) async {
+        guard state == .open else { return }
+        let ping = Outbound(opcode: .ping, payload: ByteBuffer())
+        if outbound.trySend(ping) { return }
+        let outbound = outbound
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { try? await outbound.send(ping) }
+            group.addTask { try? await Task.sleep(until: deadline, clock: .continuous) }
+            await group.next()
+            group.cancelAll()
+        }
     }
 
     func closeTimer<T: ByteStreamTransport>(_ transport: T) async {
