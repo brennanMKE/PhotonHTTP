@@ -29,8 +29,16 @@ public struct TLSConfiguration: Sendable {
         }
     }
 
-    /// The server certificate and private key.
-    public var identity: TLSIdentity
+    /// Where the listener gets the server certificate and private key on each handshake.
+    /// Replacing the store's identity (``TLSIdentityStore/replace(with:)``) changes the
+    /// certificate for new handshakes without restarting the listener (#0140).
+    public var identityStore: TLSIdentityStore
+    /// The server certificate and private key new handshakes use. Setting it gives this
+    /// configuration a new ``identityStore``; other copies keep theirs.
+    public var identity: TLSIdentity {
+        get { identityStore.identity }
+        set { identityStore = TLSIdentityStore(newValue) }
+    }
     /// The lowest TLS version accepted. TLS 1.2 by default; Network.framework negotiates the
     /// highest version both sides support, so TLS 1.3 is used whenever the client offers it.
     public var minimumVersion: TLSVersion
@@ -55,8 +63,23 @@ public struct TLSConfiguration: Sendable {
         clientAuthentication: ClientAuthentication? = nil,
         handshakeTimeout: Duration = .seconds(10)
     ) {
+        self.init(identityStore: TLSIdentityStore(identity), minimumVersion: minimumVersion,
+                  maximumVersion: maximumVersion, alpn: alpn, clientAuthentication: clientAuthentication,
+                  handshakeTimeout: handshakeTimeout)
+    }
+
+    /// Takes the identity from `identityStore` on every handshake, so it can be replaced while
+    /// the listener runs (#0140).
+    public init(
+        identityStore: TLSIdentityStore,
+        minimumVersion: TLSVersion = .v1_2,
+        maximumVersion: TLSVersion? = nil,
+        alpn: [String] = ["http/1.1"],
+        clientAuthentication: ClientAuthentication? = nil,
+        handshakeTimeout: Duration = .seconds(10)
+    ) {
         precondition(handshakeTimeout > .zero, "handshakeTimeout must be positive")
-        self.identity = identity
+        self.identityStore = identityStore
         self.minimumVersion = minimumVersion
         self.maximumVersion = maximumVersion
         self.alpn = alpn
@@ -75,15 +98,21 @@ public struct TLSConfiguration: Sendable {
         self.init(identity: try TLSIdentity(pkcs12Path: pkcs12Path, password: password), alpn: alpn)
     }
 
+    /// Checks the version range: only TLS 1.2 and TLS 1.3 are accepted, and the minimum may
+    /// not exceed the maximum. Nothing is clamped (#0141). ``TCPListener`` calls it at init.
+    public func validate() throws(TLSConfigurationError) {
+        try TLSVersion.checkRange(minimum: minimumVersion, maximum: maximumVersion)
+    }
+
     /// Network.framework TLS options for the listener.
-    func makeOptions() throws(TransportError) -> NWProtocolTLS.Options {
+    func makeOptions() throws(TLSConfigurationError) -> NWProtocolTLS.Options {
+        try validate()
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
-        guard let secIdentity = identity.makeSecIdentity() else { throw .failed(code: -1) }
-        sec_protocol_options_set_local_identity(options, secIdentity)
-        sec_protocol_options_set_min_tls_protocol_version(options, minimumVersion.protocolVersion)
+        identityStore.install(on: options)
+        sec_protocol_options_set_min_tls_protocol_version(options, minimumVersion.supportedProtocolVersion!)
         if let maximumVersion {
-            sec_protocol_options_set_max_tls_protocol_version(options, maximumVersion.protocolVersion)
+            sec_protocol_options_set_max_tls_protocol_version(options, maximumVersion.supportedProtocolVersion!)
         }
         for token in alpn {
             sec_protocol_options_add_tls_application_protocol(options, token)
@@ -128,7 +157,8 @@ public struct TLSClientConfiguration: Sendable, Hashable {
         self.maximumVersion = maximumVersion
     }
 
-    func makeOptions() -> NWProtocolTLS.Options {
+    func makeOptions() throws(TLSConfigurationError) -> NWProtocolTLS.Options {
+        try TLSVersion.checkRange(minimum: minimumVersion, maximum: maximumVersion)
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         for token in alpn {
@@ -137,9 +167,9 @@ public struct TLSClientConfiguration: Sendable, Hashable {
         if let serverName {
             sec_protocol_options_set_tls_server_name(options, serverName)
         }
-        sec_protocol_options_set_min_tls_protocol_version(options, minimumVersion.protocolVersion)
+        sec_protocol_options_set_min_tls_protocol_version(options, minimumVersion.supportedProtocolVersion!)
         if let maximumVersion {
-            sec_protocol_options_set_max_tls_protocol_version(options, maximumVersion.protocolVersion)
+            sec_protocol_options_set_max_tls_protocol_version(options, maximumVersion.supportedProtocolVersion!)
         }
         if let expected = pinnedCertificate {
             sec_protocol_options_set_verify_block(options, { _, trust, complete in
@@ -151,9 +181,44 @@ public struct TLSClientConfiguration: Sendable, Hashable {
 }
 
 extension TLSVersion {
-    /// The Security framework value. Versions it does not name map to TLS 1.2.
-    var protocolVersion: tls_protocol_version_t {
-        tls_protocol_version_t(rawValue: rawValue) ?? .TLSv12
+    /// The Security framework value for a version this server supports (TLS 1.2 and 1.3), or
+    /// `nil`. Nothing is clamped: an older or unknown version is an error (#0141).
+    var supportedProtocolVersion: tls_protocol_version_t? {
+        switch self {
+        case .v1_2: .TLSv12
+        case .v1_3: .TLSv13
+        default: nil
+        }
+    }
+
+    /// Throws unless both bounds are supported versions and `minimum` does not exceed `maximum`.
+    static func checkRange(minimum: TLSVersion, maximum: TLSVersion?) throws(TLSConfigurationError) {
+        guard minimum.supportedProtocolVersion != nil else { throw .unsupportedMinimumVersion(minimum) }
+        guard let maximum else { return }
+        guard maximum.supportedProtocolVersion != nil else { throw .unsupportedMaximumVersion(maximum) }
+        guard minimum <= maximum else { throw .emptyVersionRange(minimum: minimum, maximum: maximum) }
+    }
+}
+
+/// Why TLS settings cannot be used (#0141). The ``description`` says what to change.
+public enum TLSConfigurationError: Error, Sendable, Hashable, CustomStringConvertible {
+    /// The minimum version is not TLS 1.2 or TLS 1.3. Older versions are not offered, and the
+    /// value is never silently changed to a supported one.
+    case unsupportedMinimumVersion(TLSVersion)
+    /// The maximum version is not TLS 1.2 or TLS 1.3.
+    case unsupportedMaximumVersion(TLSVersion)
+    /// The minimum version is above the maximum.
+    case emptyVersionRange(minimum: TLSVersion, maximum: TLSVersion)
+
+    public var description: String {
+        switch self {
+        case .unsupportedMinimumVersion(let version):
+            "unsupported minimum TLS version \(version): use TLSv1.2 or TLSv1.3 (TLS 1.0 and 1.1 are not offered)"
+        case .unsupportedMaximumVersion(let version):
+            "unsupported maximum TLS version \(version): use TLSv1.2, TLSv1.3, or none for the system's highest"
+        case .emptyVersionRange(let minimum, let maximum):
+            "minimum TLS version \(minimum) is above the maximum \(maximum)"
+        }
     }
 }
 

@@ -5,6 +5,8 @@
 #
 #   scripts/make-test-identity.sh           # creates the identity if it is missing (idempotent)
 #   scripts/make-test-identity.sh --force   # replaces it
+#   scripts/make-test-identity.sh --name second   # another identity in .test-identity/second/
+#                                                 # (certificate reload tests, #0140)
 #
 # Output:
 #   .test-identity/server.p12   PKCS#12 identity, password "sws-test-password"
@@ -20,13 +22,27 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/.test-identity"
 PASSWORD="sws-test-password"
+FORCE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1 ;;
+    --name)
+      shift
+      case "${1:-}" in
+        ""|*/*|.*) echo "usage: $0 [--force] [--name NAME]" >&2; exit 2 ;;
+      esac
+      OUT="$OUT/$1" ;;
+    *) echo "usage: $0 [--force] [--name NAME]" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 if [ -z "${OPENSSL:-}" ]; then
   # /usr/bin/openssl is LibreSSL; prefer Homebrew OpenSSL when it is installed.
   if [ -x /opt/homebrew/bin/openssl ]; then OPENSSL=/opt/homebrew/bin/openssl; else OPENSSL=openssl; fi
 fi
 
-if [ "${1:-}" != "--force" ] && [ -s "$OUT/server.p12" ] && [ -s "$OUT/cert.der" ] && [ -s "$OUT/key.pem" ]; then
+if [ -z "$FORCE" ] && [ -s "$OUT/server.p12" ] && [ -s "$OUT/cert.der" ] && [ -s "$OUT/key.pem" ]; then
   echo "Test identity already exists: $OUT/server.p12"
   exit 0
 fi

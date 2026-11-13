@@ -50,35 +50,40 @@ public enum TestIdentity {
     /// `<repository root>/.test-identity`.
     public static var directory: String { repositoryRoot + "/.test-identity" }
 
-    private static let cache = Mutex<Material?>(nil)
+    private static let cache = Mutex<[String: Material]>([:])
 
     /// Returns the identity files, generating them first if they are missing. The result is
     /// cached for the process; concurrent callers in one process run the script at most once.
-    public static func load() throws(Failure) -> Material {
+    ///
+    /// `name` selects another identity with its own key and certificate, in
+    /// `.test-identity/NAME/` (`make-test-identity.sh --name NAME`), for tests that swap
+    /// certificates (#0140). The default is the shared test identity.
+    public static func load(name: String? = nil) throws(Failure) -> Material {
         try cache.withLock { cached throws(Failure) -> Material in
-            if let cached { return cached }
-            let material = try loadOrGenerate()
-            cached = material
+            if let material = cached[name ?? ""] { return material }
+            let material = try loadOrGenerate(name: name)
+            cached[name ?? ""] = material
             return material
         }
     }
 
-    private static func loadOrGenerate() throws(Failure) -> Material {
-        let p12Path = directory + "/server.p12"
-        let derPath = directory + "/cert.der"
+    private static func loadOrGenerate(name: String?) throws(Failure) -> Material {
+        let folder = name.map { directory + "/" + $0 } ?? directory
+        let p12Path = folder + "/server.p12"
+        let derPath = folder + "/cert.der"
         if !FileManager.default.fileExists(atPath: p12Path) || !FileManager.default.fileExists(atPath: derPath) {
-            try runScript()
+            try runScript(name: name)
         }
         guard let p12 = FileManager.default.contents(atPath: p12Path) else { throw .missingFile(p12Path) }
         guard let der = FileManager.default.contents(atPath: derPath) else { throw .missingFile(derPath) }
-        return Material(pkcs12: [UInt8](p12), certificateDER: [UInt8](der), directory: directory)
+        return Material(pkcs12: [UInt8](p12), certificateDER: [UInt8](der), directory: folder)
     }
 
     /// Runs the (idempotent, atomic) script. It only invokes openssl on files.
-    private static func runScript() throws(Failure) {
+    private static func runScript(name: String?) throws(Failure) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = [repositoryRoot + "/scripts/make-test-identity.sh"]
+        process.arguments = [repositoryRoot + "/scripts/make-test-identity.sh"] + (name.map { ["--name", $0] } ?? [])
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

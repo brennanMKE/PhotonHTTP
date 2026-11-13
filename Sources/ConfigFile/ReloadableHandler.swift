@@ -18,12 +18,20 @@ extension ServerSettings {
     /// The keys that take effect only at startup, because they configure the listeners, the
     /// protocols or the server itself rather than the handler chain: those whose values differ
     /// between `self` and `other` (#0127).
+    ///
+    /// `tls.identity` and `tls.password` / `tls.passwordEnv` are not listed: SIGHUP rereads the
+    /// identity file and running listeners present it to new handshakes (#0140). Adding or
+    /// removing `tls`, or changing `tls.port`, needs a restart.
     public func restartOnlyChanges(comparedTo other: ServerSettings) -> [String] {
         var keys: [String] = []
         if host != other.host { keys.append("host") }
         if port != other.port { keys.append("port") }
         if transport != other.transport { keys.append("transport") }
-        if tls != other.tls { keys.append("tls") }
+        switch (tls, other.tls) {
+        case (nil, nil): break
+        case (let new?, let old?): if new.port != old.port { keys.append("tls.port") }
+        default: keys.append("tls")
+        }
         if http3 != other.http3 { keys.append("http3") }
         if http2 != other.http2 { keys.append("http2") }
         if maxConnections != other.maxConnections { keys.append("maxConnections") }
