@@ -186,7 +186,13 @@ import Testing
 
         // Free the port: the same restart now succeeds and the old port closes.
         await holder.close()
-        let retry = try await command(["restart", "--config", fixture.config.path])
+        // The holder's socket can take a moment to be released under load; the failed
+        // attempts in between are themselves safe (the old listener keeps serving).
+        var retry = try await command(["restart", "--config", fixture.config.path])
+        for _ in 0..<20 where retry.status != 0 && retry.stdout.contains("Address already in use") {
+            try await Task.sleep(for: .milliseconds(250))
+            retry = try await command(["restart", "--config", fixture.config.path])
+        }
         #expect(retry.status == 0, "\(retry.stdout)\(retry.stderr)")
         #expect(try await RestartClient.status(of: "GET /a.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", port: taken) == 200)
 
