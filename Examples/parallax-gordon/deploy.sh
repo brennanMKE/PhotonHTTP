@@ -109,7 +109,7 @@ done
 
 echo "Shipping to $SSH_DEST:${DIR}…"
 remote "mkdir -p '$DIR/logs' ~/Library/LaunchAgents"
-rsync -a --delete --exclude logs "$stage/" "$SSH_DEST:$DIR/"
+rsync -a --delete --exclude logs --exclude run "$stage/" "$SSH_DEST:$DIR/"
 
 echo "Restarting the LaunchAgents…"
 remote "set -e
