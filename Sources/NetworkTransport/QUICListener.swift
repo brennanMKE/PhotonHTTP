@@ -61,8 +61,7 @@ public final class QUICListener: Sendable {
     public init(configuration: Configuration = Configuration(), identity: TLSIdentity) throws {
         self.configuration = configuration
         let quic = configuration.quic.makeOptions()
-        guard let secIdentity = identity.makeSecIdentity() else { throw TransportError.failed(code: -1) }
-        sec_protocol_options_set_local_identity(quic.securityProtocolOptions, secIdentity)
+        sec_protocol_options_set_local_identity(quic.securityProtocolOptions, identity.networkIdentity)
         let parameters = NWParameters(quic: quic)
         parameters.allowLocalEndpointReuse = true
         parameters.includePeerToPeer = false

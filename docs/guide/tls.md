@@ -162,8 +162,11 @@ struct ShowTLS: HTTPMiddleware {
 
 - **Versions.** Network.framework negotiates the highest version both sides support, so TLS 1.3
   is used whenever the client offers it. To require TLS 1.3 on HTTPS, set
-  `minimumVersion: .v1_3` in a custom server. `TLSVersion` values Security.framework does not
-  name map to TLS 1.2, so a minimum below 1.2 cannot be configured.
+  `minimumVersion: .v1_3` in a custom server. Only `.v1_2` and `.v1_3` are accepted: any other
+  `minimumVersion` or `maximumVersion` (TLS 1.0, 1.1, an unknown value) or a minimum above the
+  maximum makes `TCPListener.init` throw `TLSConfigurationError` (for example `unsupported
+  minimum TLS version TLS(0x301): use TLSv1.2 or TLSv1.3`); nothing is clamped.
+  `TLSConfiguration.validate()` runs the same check up front.
 - **Ciphers, curves, session resumption, 0-RTT.** The server sets none of these: whatever
   Network.framework's defaults are for the macOS release applies. There is no cipher list to
   tune, and the server does not use 0-RTT (early data) on either TLS or QUIC.
@@ -390,14 +393,17 @@ server must be reachable from other machines.
 ### Startup errors
 
 The executable loads the identity before binding and exits with status 1 on failure. Messages
-come from `ServerMain.describe(identity:)` and the config parser:
+come from `TLSIdentityError`'s description and the config parser:
 
 | Message | Meaning | Fix |
 |---|---|---|
-| `cannot load TLS identity PATH: the file cannot be read` | `fileUnreadable`: missing file or no permission | Check the path (relative to the config file) and its mode |
-| `cannot load TLS identity PATH: wrong password (errSecAuthFailed)` | `importFailed(-25293)` | Fix `password` / the `passwordEnv` variable's value |
-| `cannot load TLS identity PATH: PKCS#12 import failed (OSStatus N)` | `SecPKCS12Import` rejected the file: not PKCS#12 (a PEM file, say) or an encryption it does not accept | Re-export with `-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1` |
-| `cannot load TLS identity PATH: the file holds no identity` | The bundle has certificates but no private key | Export with `-inkey` |
+| `cannot load TLS identity PATH: the file PATH cannot be read; …` | `fileUnreadable`: missing file or no permission | Check the path (relative to the config file) and its mode |
+| `cannot load TLS identity PATH: wrong password (OSStatus -25293); …` | `importFailed(-25293)` (or `-25264`, MAC check failed) | Fix `password` / the `passwordEnv` variable's value |
+| `cannot load TLS identity PATH: not a PKCS#12 file Security.framework can read (OSStatus N); …` | `SecPKCS12Import` rejected the file: not PKCS#12 (a PEM file, say) or an encryption it does not accept | Re-export with `-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1` |
+| `cannot load TLS identity PATH: PKCS#12 import failed (OSStatus N); …` | Another `SecPKCS12Import` failure | Re-export the file as above |
+| `cannot load TLS identity PATH: the file holds no certificate with its private key; …` | `noIdentity`: the bundle has certificates but no private key | Export with `-inkey` |
+| `cannot load TLS identity PATH: the certificate's key type (…) is not supported; …` | `unsupportedKeyType`: not RSA or EC (Ed25519, DSA) | Issue an RSA or EC P-256/P-384 certificate |
+| `cannot load TLS identity PATH: Network.framework cannot use the certificate and key as a TLS identity; …` | `notUsableForTLS`: `sec_identity_create` failed | Check that the key belongs to the certificate |
 | `"tls.passwordEnv": environment variable NAME is not set` | The variable is missing from the server's environment | Set it (under launchd: `EnvironmentVariables`) |
 | `config file …: "tls.identity" must be set to a PKCS#12 file` | `tls` without `identity` | Add it |
 | `config file …: "tls.password" or "tls.passwordEnv" must be set` / `must have "password" or "passwordEnv", not both` | Password keys missing or doubled | Use exactly one |

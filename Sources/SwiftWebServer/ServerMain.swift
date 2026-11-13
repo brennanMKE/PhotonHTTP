@@ -233,7 +233,7 @@ enum ServerMain {
         do {
             identity = try TLSIdentity(pkcs12Path: path, password: password)
         } catch {
-            throw ConfigFileError(key: "tls.identity", "cannot load TLS identity \(path): \(describe(identity: error))")
+            throw ConfigFileError(key: "tls.identity", "cannot load TLS identity \(path): \(error)")
         }
         listeners.append(.byteStream(name: "https") { bind in
             try TCPListener(configuration: .init(host: host, port: tls.port, tcp: tcp),
@@ -335,16 +335,6 @@ enum ServerMain {
             if let http3 = settings.http3 { text += ", h3 \(http3.port.map(String.init) ?? "\(tls.port)")" }
         }
         return text
-    }
-
-    static func describe(identity error: any Error) -> String {
-        switch error as? TLSIdentityError {
-        case .fileUnreadable?: "the file cannot be read"
-        case .importFailed(let status)? where status == -25293: "wrong password (errSecAuthFailed)"
-        case .importFailed(let status)?: "PKCS#12 import failed (OSStatus \(status))"
-        case .noIdentity?: "the file holds no identity"
-        case nil: "\(error)"
-        }
     }
 
     /// A transport error with its POSIX meaning (`failed(code: 48)` reads "address already in use").
