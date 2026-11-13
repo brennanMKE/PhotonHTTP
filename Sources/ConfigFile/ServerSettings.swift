@@ -140,6 +140,31 @@ public struct ServerSettings: Sendable, Equatable {
     /// `"accessLog": {"path": "logs/access.log", "format": "combined", "metrics": "/metrics"}`.
     public var accessLog: AccessLogSettings?
 
+    /// Watching the config file and the files it names (#0142). On by default, polling every
+    /// 2 s. In the file: `"reload": {"watch": true, "interval": 2}`, or `"reload": false` to
+    /// reload on `SIGHUP` only.
+    public var reload = ReloadSettings()
+
+    /// The status file the server writes for `SwiftWebServer check`, `reload` and `status`
+    /// (#0143), relative to ``baseDirectory``. Default `run/status.json`; written only when
+    /// the settings come from a config file. `false` or `null` in the file turns it off.
+    public var statusFile: String? = "run/status.json"
+
+    /// How the server notices a changed configuration (#0142).
+    public struct ReloadSettings: Sendable, Equatable {
+        /// Poll the config file and the files a reload reads (``ServerSettings/reloadInputs``)
+        /// and reload when one changes. Default true. `SIGHUP` reloads either way.
+        public var watch = true
+        /// Time between polls. Default 2 s. A change is loaded once the files have stopped
+        /// changing for `min(interval, 0.5 s)`, so a half-written file is not read.
+        public var interval: Duration = .seconds(2)
+
+        public init(watch: Bool = true, interval: Duration = .seconds(2)) {
+            self.watch = watch
+            self.interval = interval
+        }
+    }
+
     /// The TLS listener's identity and port.
     public struct TLSSettings: Sendable, Equatable {
         /// Where the PKCS#12 password comes from.
@@ -268,6 +293,26 @@ public struct ServerSettings: Sendable, Equatable {
         if let tls, tls.port != 0, tls.port == port {
             throw ConfigFileError(key: "tls.port", "\"tls.port\" \(tls.port) is the cleartext port too; both are TCP")
         }
+    }
+
+    /// The files other than the config file that building the chain or reloading reads, so a
+    /// change to them needs a reload (#0142): the TLS identity, Basic credential files, and
+    /// error page files (under ``root`` and, with ``hosts``, under each site's root). Absolute
+    /// paths after resolving; a file need not exist.
+    public var reloadInputs: [String] {
+        var paths: [String] = []
+        if let identity = resolvedIdentityPath { paths.append(identity) }
+        for area in auth {
+            if let file = area.basicFile { paths.append(Self.resolve(file, against: baseDirectory)) }
+        }
+        if case .files(let pages) = errorPages {
+            let roots = [resolvedRoot] + hosts.map { Self.resolve($0.root, against: baseDirectory) }
+            for root in roots {
+                for page in pages.values.sorted() { paths.append(Self.resolve(page, against: root)) }
+            }
+        }
+        var seen = Set<String>()
+        return paths.filter { seen.insert($0).inserted }
     }
 
     /// ``root`` resolved against ``baseDirectory``.

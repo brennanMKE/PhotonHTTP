@@ -37,6 +37,41 @@ Exit status: `0` after a graceful stop, `1` on a configuration or startup error 
 missing root, unreadable identity, port in use) with a message naming the key, `2` on a usage
 error.
 
+### Control commands
+
+The same executable checks a config and talks to a running server (#0143). It finds the server
+through its status file (`statusFile`, default `run/status.json` next to the config) and
+signals its pid; there is no control socket, so nothing new is reachable over the network.
+
+```
+SwiftWebServer check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
+SwiftWebServer reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
+SwiftWebServer status  [--config FILE] [--json]
+SwiftWebServer restart [--config FILE]
+```
+
+| Command | What it does |
+|---|---|
+| `check` | Loads and builds the config as a reload would (root, error pages, credential files, the TLS identity in memory only) and prints `PATH: valid` or `PATH: invalid: …`. When a server runs with this config, it also prints which keys would change: `can hot-reload: root changed`, `no setting changes` (a reload still rereads the identity and credential files), or `needs a restart: port changed and needs a restart; run `SwiftWebServer restart` to apply them` |
+| `reload` | Runs `check`; when the config is valid and needs no restart, sends SIGHUP and waits (up to `--timeout`, default 10 s) for the server to record the outcome, then prints `reloaded: …`, `reload failed, …` or `reload rejected, …`. It does not signal when the config is invalid or needs a restart |
+| `status` | Prints the status file: state and pid, listening addresses, config path and SHA-256, the last reload (time, `signal` or `watch`, result, message), the reload count and any restart-required keys. `--json` prints the file itself |
+| `restart` | Graceful restart is #0144 and not available yet; it prints how to restart by hand (`launchctl kickstart -k`, or SIGTERM and start again) |
+
+Without `--root`/`--host`/`--port`, `check` and `reload` apply the overrides the running server
+was started with (recorded in the status file). Exit status: `0` success, `1` invalid config,
+no running server, a failed reload or a timeout, `2` usage error, `3` a restart is required
+(the reload was or would be rejected).
+
+The status file is JSON, rewritten atomically (temporary file, then rename) with mode 0600 at
+startup once the listeners are bound, after every reload and at a clean exit
+(`"state": "stopped"`). It holds `pid`, `started`, `config`, `configSHA256` (of the file as
+last loaded), `arguments`, `listening`, `reloads`, `lastReload` (`time`, `trigger`, `result`:
+`reloaded` / `failed` / `rejected`, `message`, `changed`, `restartRequired`),
+`restartRequired` (keys changed in the file but not applied; empty after a successful
+reload) and `settings`: a digest per key of the running values, never the values themselves,
+so `check` can compare without the file holding passwords. It is written only when the server
+runs with a config file.
+
 ## `http-config.json` reference
 
 The file is one JSON object. **Every key is optional**: a missing key keeps its default, so
@@ -71,6 +106,10 @@ server-sent events.
 | `timeouts.send` | seconds | `30` | Longest wait for the client to accept response bytes |
 | `timeouts.linger` | seconds | `2` | Lingering close after an error response |
 | `drainTimeout` | seconds or `null` | `10` | Graceful stop waits this long for open connections; `null` waits indefinitely (`0` cancels at once) |
+| `reload` | bool or object | `{"watch": true, "interval": 2}` | Hot reload when the config or a file it names changes ([reload](#shutdown-restart-and-reload)). `false` reloads on SIGHUP only |
+| `reload.watch` | bool | `true` | Poll the files with `stat` and reload on a change |
+| `reload.interval` | seconds 0.01–3600 | `2` | Time between polls |
+| `statusFile` | path, `false` or `null` | `"run/status.json"` | Status file for the [control commands](#control-commands), relative to the config's directory; `false` turns it off |
 
 ### Files
 
@@ -200,8 +239,9 @@ chmod 600 certs/example.p12
 After a renewal, write the new `.p12` over the old path (make it in a temporary file, then
 `mv` it into place, so the server never reads half a file) and send **SIGHUP**: the server
 rereads the identity, and new HTTPS and HTTP/3 connections get the new certificate without a
-restart or dropped connections (see [reload](#shutdown-restart-and-reload)). ACME clients have
-a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
+restart or dropped connections (see [reload](#shutdown-restart-and-reload)). With the file
+watcher on (the default, `reload.watch`), the signal is optional: the server sees the new file
+within `reload.interval` and reloads by itself. ACME clients have a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
 stderr confirms it with `reload: TLS identity PATH reloaded`; if the new file does not load
 (wrong password, not PKCS#12) it prints `warning: reload: cannot load TLS identity …; keeping
 the current TLS certificate` and keeps serving the old one.
@@ -342,6 +382,15 @@ wrapper write a pid file).
   to `drainTimeout` seconds, then the rest are cancelled; the access log flushes and the
   process exits 0. A second signal during the drain is harmless. `scripts/sigterm.sh` sends
   SIGTERM to whatever listens on `PORT` (default 8080).
+- **Hot reload, no signal needed** (#0142). The server polls `http-config.json` and the files
+  it names that a reload reads (the TLS identity, `auth` Basic credential files, `errorPages`
+  files) with `stat` every `reload.interval` seconds (default 2). A change of modification
+  time, size or inode (an editor or `tailscale cert`/lego renaming a new file into place)
+  starts a reload once the files have stopped changing for `min(interval, 0.5 s)`, so a file
+  still being written is not read; a file that is malformed when read never replaces the
+  running configuration. stderr says `PATH changed, reloading the configuration`. Reloads,
+  whether from the watcher or SIGHUP, run one at a time, and none start once the server is
+  draining. `"reload": false` turns the watcher off.
 - **SIGHUP reloads** `http-config.json` (the same file and command-line overrides as at
   startup) and reopens the access log file. The new configuration is parsed, validated and
   built first; on success new requests use it, while requests already running finish on the
@@ -351,19 +400,25 @@ wrapper write a pid file).
   `reload failed, keeping the running configuration: …` and nothing changes except the log
   reopen. Success prints `reloaded the configuration`.
 
-  | Reloaded by SIGHUP | Needs a restart (a change is reported and ignored) |
+  | Reloaded (SIGHUP or the watcher) | Needs a restart (a reload that changes one is rejected whole) |
   |---|---|
-  | `root`, `index`, `mimeTypes`, `defaultMimeType`, `blockList`, `blockDotfiles`, `caching`, `errorPages`, `compression`, `hosts`, `auth` (and its credential files), `proxy` and `hosts[].proxy`, `accessLog` (path, format, metrics, flush interval), `tls.identity` and `tls.password` / `tls.passwordEnv` (the identity file is reread on every SIGHUP, so a renewal at the same path is picked up) | `host`, `port`, `transport`, adding or removing `tls`, `tls.port`, `http2`, `http3`, `maxConnections`, `drainTimeout`, `timeouts`, `maxBodySize` |
+  | `root`, `index`, `mimeTypes`, `defaultMimeType`, `blockList`, `blockDotfiles`, `caching`, `errorPages`, `compression`, `hosts`, `auth` (and its credential files), `proxy` and `hosts[].proxy`, `accessLog` (path, format, metrics, flush interval), `reload`, `statusFile`, `tls.identity` and `tls.password` / `tls.passwordEnv` (the identity file is reread on every SIGHUP, so a renewal at the same path is picked up) | `host`, `port`, `transport`, adding or removing `tls`, `tls.port`, `http2`, `http3`, `maxConnections`, `drainTimeout`, `timeouts`, `maxBodySize` |
 
   The identity reload prints one line: `reload: TLS identity PATH reloaded; new HTTPS and HTTP/3
   handshakes use the new certificate`, `reload: TLS identity PATH unchanged`, or `warning:
   reload: cannot load TLS identity PATH: …; keeping the current TLS certificate`. Open
   connections keep the certificate they negotiated.
 
-  A restart-only change prints `warning: reload: port changed; needs a restart, ignored`; the
-  rest of the file still reloads. Access log metrics start from zero after a reload (the new
-  chain has its own counters). To apply restart-only keys, restart
-  (`launchctl kickstart -k …`, which sends SIGTERM and drains).
+  **A restart-only change rejects the whole reload** (#0143): none of the file applies, not
+  even its reloadable keys, so the running state always matches one whole config file. stderr
+  says `reload rejected, keeping the running configuration: port changed and needs a restart;
+  run `SwiftWebServer restart` to apply them`, and the status file records the keys in
+  `restartRequired` until a reload succeeds. Every later reload is rejected the same way until
+  the file is put back or the server restarts. `SwiftWebServer check` tells you before you
+  save or signal. Access log metrics start from zero after a reload (the new chain has its own
+  counters). To apply restart-only keys, restart: `SwiftWebServer restart` is the graceful
+  in-process restart of #0144; until it lands, `launchctl kickstart -k …` (SIGTERM drains, then
+  launchd starts the server again, with a brief gap).
 - Static file *contents* need no restart: cached entries are re-checked with `stat` at most
   once per second.
 

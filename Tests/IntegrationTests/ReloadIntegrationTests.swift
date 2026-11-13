@@ -7,7 +7,8 @@ import Testing
 /// #0127 acceptance through the shipped `SwiftWebServer` binary: SIGHUP reopens the access log
 /// (a renamed log is followed by a new file at the path), reloads `http-config.json` (a new
 /// proxy mount takes effect while a slow download in flight completes), and keeps the running
-/// configuration when the new file is invalid. Everything binds 127.0.0.1 port 0 and lives
+/// configuration when the new file is invalid. These configs turn the file watcher (#0142) off,
+/// so only the signal reloads. Everything binds 127.0.0.1 port 0 and lives
 /// under `$TMPDIR`; every child is SIGKILLed on every path.
 @Suite struct ReloadIntegrationTests {
     func curl(_ arguments: [String]) async throws -> String {
@@ -48,7 +49,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: temp) }
         try Data("hi\n".utf8).write(to: temp.appending(path: "Public/a.txt"))
         let config = temp.appending(path: "http-config.json")
-        try Data(#"{"port": 0, "accessLog": {"path": "logs/access.log", "flushInterval": 0.05}}"#.utf8).write(to: config)
+        try Data(#"{"port": 0, "reload": false, "accessLog": {"path": "logs/access.log", "flushInterval": 0.05}}"#.utf8).write(to: config)
         let server = try ParityTests.launch(["--config", config.path, "--port", "0"])
         defer { server.kill() }
         let base = "http://127.0.0.1:\(try await server.listeningPort())"
@@ -95,7 +96,7 @@ import Testing
         let upstreamPort = try await upstream.listeningPort()
 
         let config = temp.appending(path: "http-config.json")
-        try Data(#"{"port": 0, "root": "Public"}"#.utf8).write(to: config)
+        try Data(#"{"port": 0, "reload": false, "root": "Public"}"#.utf8).write(to: config)
         let server = try ParityTests.launch(["--config", config.path, "--port", "0"])
         defer { server.kill() }
         let port = try await server.listeningPort()
@@ -110,13 +111,22 @@ import Testing
                                           timeout: .seconds(40), mergeStandardError: true)
         try await Task.sleep(for: .milliseconds(500))
 
+        // #0143: a restart-only change (host) rejects the whole file, the new mount included.
         try Data("""
-        {"port": 0, "host": "127.0.0.2", "root": "Public",
+        {"port": 0, "reload": false, "host": "127.0.0.2", "root": "Public",
+         "proxy": [{"path": "/api", "upstream": "http://127.0.0.1:\(upstreamPort)", "stripPrefix": true}]}
+        """.utf8).write(to: config)
+        server.signal(SIGHUP)
+        try await waitForStderr(server, "reload rejected, keeping the running configuration")
+        #expect(server.stderr.contains("host changed and needs a restart; run `SwiftWebServer restart`"), "\(server.stderr)")
+        #expect(try await curl(["-o", "/dev/null", "-w", "%{http_code}", "\(base)/api/data.txt"]) == "404")
+
+        try Data("""
+        {"port": 0, "reload": false, "root": "Public",
          "proxy": [{"path": "/api", "upstream": "http://127.0.0.1:\(upstreamPort)", "stripPrefix": true}]}
         """.utf8).write(to: config)
         server.signal(SIGHUP)
         try await waitForStderr(server, "reloaded the configuration")
-        #expect(server.stderr.contains("host changed; needs a restart"), "\(server.stderr)")
         #expect(try await curl(["\(base)/api/data.txt"]) == "upstream\n")
 
         // Invalid: reported, and the reloaded configuration keeps serving.
@@ -125,7 +135,7 @@ import Testing
         try await waitForStderr(server, "reload failed, keeping the running configuration")
         #expect(try await curl(["\(base)/api/data.txt"]) == "upstream\n")
         // Valid JSON whose root does not exist: the chain cannot be built, same outcome.
-        try Data(#"{"port": 0, "root": "Missing"}"#.utf8).write(to: config)
+        try Data(#"{"port": 0, "reload": false, "root": "Missing"}"#.utf8).write(to: config)
         server.signal(SIGHUP)
         try await waitForStderr(server, "reload failed, keeping the running configuration", count: 2)
         #expect(try await curl(["\(base)/api/data.txt"]) == "upstream\n")
@@ -154,7 +164,7 @@ import Testing
         try Data(first.pkcs12).write(to: p12)
         let config = temp.appending(path: "http-config.json")
         try Data(#"""
-        {"root": "Public", "drainTimeout": 2,
+        {"root": "Public", "drainTimeout": 2, "reload": false,
          "tls": {"identity": "id.p12", "password": "\#(TestIdentity.password)", "port": 0}, "http3": true}
         """#.utf8).write(to: config)
         let server = try ParityTests.launch(["--config", config.path, "--port", "0"])
@@ -216,6 +226,44 @@ import Testing
         #expect(try await get(still).hasPrefix("HTTP/1.1 200"))
 
         for transport in [before, after, still] { await transport.close(.normal) }
+        server.signal(SIGTERM)
+        #expect(try await server.waitForExit(timeout: .seconds(10)) == 0, "\(server.stderr)")
+    }
+
+    /// #0142: with no signal, an edit and a replacement by rename reload within the watch
+    /// interval; a malformed file never replaces the running configuration.
+    @Test(.timeLimit(.minutes(1)))
+    func editingTheConfigReloadsWithoutASignal() async throws {
+        let temp = try temporaryDirectory("reload-watch")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try FileManager.default.createDirectory(at: temp.appending(path: "Other"), withIntermediateDirectories: true)
+        try Data("public\n".utf8).write(to: temp.appending(path: "Public/a.txt"))
+        try Data("other\n".utf8).write(to: temp.appending(path: "Other/a.txt"))
+        let config = temp.appending(path: "http-config.json")
+        func configText(_ root: String) -> String { #"{"port": 0, "root": "\#(root)", "reload": {"interval": 0.1}}"# }
+        try Data(configText("Public").utf8).write(to: config)
+        let server = try ParityTests.launch(["--config", config.path, "--port", "0"])
+        defer { server.kill() }
+        let base = "http://127.0.0.1:\(try await server.listeningPort())"
+        #expect(try await curl(["\(base)/a.txt"]) == "public\n")
+
+        try Data(configText("Other").utf8).write(to: config)
+        try await waitForStderr(server, "reloaded the configuration")
+        #expect(server.stderr.contains("\(config.path) changed, reloading the configuration"), "\(server.stderr)")
+        #expect(try await curl(["\(base)/a.txt"]) == "other\n")
+
+        // Malformed (as a half-written file would be): reported, the running configuration stays.
+        try Data(#"{"port": 0, "root": "#.utf8).write(to: config)
+        try await waitForStderr(server, "reload failed, keeping the running configuration")
+        #expect(try await curl(["\(base)/a.txt"]) == "other\n")
+
+        // Written elsewhere and renamed over the config, as editors do.
+        let staged = temp.appending(path: "http-config.json.new")
+        try Data(configText("Public").utf8).write(to: staged)
+        #expect(rename(staged.path, config.path) == 0)
+        try await waitForStderr(server, "reloaded the configuration", count: 2)
+        #expect(try await curl(["\(base)/a.txt"]) == "public\n")
+
         server.signal(SIGTERM)
         #expect(try await server.waitForExit(timeout: .seconds(10)) == 0, "\(server.stderr)")
     }
