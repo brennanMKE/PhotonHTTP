@@ -29,8 +29,16 @@ public struct TLSConfiguration: Sendable {
         }
     }
 
-    /// The server certificate and private key.
-    public var identity: TLSIdentity
+    /// Where the listener gets the server certificate and private key on each handshake.
+    /// Replacing the store's identity (``TLSIdentityStore/replace(with:)``) changes the
+    /// certificate for new handshakes without restarting the listener (#0140).
+    public var identityStore: TLSIdentityStore
+    /// The server certificate and private key new handshakes use. Setting it gives this
+    /// configuration a new ``identityStore``; other copies keep theirs.
+    public var identity: TLSIdentity {
+        get { identityStore.identity }
+        set { identityStore = TLSIdentityStore(newValue) }
+    }
     /// The lowest TLS version accepted. TLS 1.2 by default; Network.framework negotiates the
     /// highest version both sides support, so TLS 1.3 is used whenever the client offers it.
     public var minimumVersion: TLSVersion
@@ -55,8 +63,23 @@ public struct TLSConfiguration: Sendable {
         clientAuthentication: ClientAuthentication? = nil,
         handshakeTimeout: Duration = .seconds(10)
     ) {
+        self.init(identityStore: TLSIdentityStore(identity), minimumVersion: minimumVersion,
+                  maximumVersion: maximumVersion, alpn: alpn, clientAuthentication: clientAuthentication,
+                  handshakeTimeout: handshakeTimeout)
+    }
+
+    /// Takes the identity from `identityStore` on every handshake, so it can be replaced while
+    /// the listener runs (#0140).
+    public init(
+        identityStore: TLSIdentityStore,
+        minimumVersion: TLSVersion = .v1_2,
+        maximumVersion: TLSVersion? = nil,
+        alpn: [String] = ["http/1.1"],
+        clientAuthentication: ClientAuthentication? = nil,
+        handshakeTimeout: Duration = .seconds(10)
+    ) {
         precondition(handshakeTimeout > .zero, "handshakeTimeout must be positive")
-        self.identity = identity
+        self.identityStore = identityStore
         self.minimumVersion = minimumVersion
         self.maximumVersion = maximumVersion
         self.alpn = alpn
@@ -86,7 +109,7 @@ public struct TLSConfiguration: Sendable {
         try validate()
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
-        sec_protocol_options_set_local_identity(options, identity.networkIdentity)
+        identityStore.install(on: options)
         sec_protocol_options_set_min_tls_protocol_version(options, minimumVersion.supportedProtocolVersion!)
         if let maximumVersion {
             sec_protocol_options_set_max_tls_protocol_version(options, maximumVersion.supportedProtocolVersion!)

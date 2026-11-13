@@ -18,11 +18,13 @@ PKCS#12 file ─▶ TLSIdentity (SecPKCS12Import, memory only) ─┬─▶ TLSC
 | Type | File | Role |
 |---|---|---|
 | `TLSIdentity` | [TLSIdentity.swift](../../Sources/NetworkTransport/TLSIdentity.swift) | Certificate and private key imported from PKCS#12 in memory; `certificateDER` is the leaf |
-| `TLSIdentityError` | same | `fileUnreadable(path:)`, `importFailed(status:)`, `noIdentity` |
-| `TLSConfiguration` | [TLSConfiguration.swift](../../Sources/NetworkTransport/TLSConfiguration.swift) | Server TLS settings for a `TCPListener`: identity, version range, ALPN, client certificates, handshake timeout |
+| `TLSIdentityError` | same | `fileUnreadable(path:)`, `importFailed(status:)`, `noIdentity`, `unsupportedKeyType`, `notUsableForTLS`; the description says what to check |
+| `TLSIdentityStore` | same | The identity listeners present, replaceable while they run (`replace(with:)`, used by SIGHUP) |
+| `TLSConfiguration` | [TLSConfiguration.swift](../../Sources/NetworkTransport/TLSConfiguration.swift) | Server TLS settings for a `TCPListener`: identity (or `identityStore`), version range, ALPN, client certificates, handshake timeout |
+| `TLSConfigurationError` | same | An unsupported minimum or maximum TLS version, or an empty range |
 | `TLSClientConfiguration` | same | Client settings for `TCPTransport.connect(…, tls:)`, used by tests and tools (ALPN, pinned certificate, SNI, versions) |
 | `TCPListener` | [TCPListener.swift](../../Sources/NetworkTransport/TCPListener.swift) | `TCPListener(configuration:tls:)`: Network.framework TCP with `NWProtocolTLS` |
-| `QUICListener` | [QUICListener.swift](../../Sources/NetworkTransport/QUICListener.swift) | `QUICListener(configuration:identity:)`: QUIC with the same identity |
+| `QUICListener` | [QUICListener.swift](../../Sources/NetworkTransport/QUICListener.swift) | `QUICListener(configuration:identity:)` or `(configuration:identityStore:)`: QUIC with the same identity |
 | `ConnectionInfo` | [Transport.swift](../../Sources/HTTPCore/Transport.swift) | `isSecure`, `negotiatedALPN`, `tlsVersion` of each connection, visible to handlers as `context.connection` |
 | `TLSNegotiated` | [TLSNegotiated.swift](../../Sources/HTTPServer/TLSNegotiated.swift) | Runs HTTP/2 when ALPN chose `h2`, HTTP/1.1 otherwise |
 
@@ -62,8 +64,9 @@ anything you add: see [AGENTS.md](../../AGENTS.md).
   chain (leaf first, then intermediates). PEM certificate and key files are not loaded directly;
   convert them (see [Converting PEM to PKCS#12](#converting-pem-to-pkcs12)). The first identity
   in the bundle is used.
-- **One identity per server.** The executable loads it once at startup and gives the same
-  `TLSIdentity` to the HTTPS and the HTTP/3 listener.
+- **One identity per server.** The executable loads it at startup and gives the same
+  `TLSIdentityStore` to the HTTPS and the HTTP/3 listener; SIGHUP rereads the file and swaps
+  the identity in that store (see **Reload** below).
 - **Password**: `tls.password` (inline) or `tls.passwordEnv` (the name of an environment
   variable), exactly one of the two. An unset variable stops startup with
   `"tls.passwordEnv": environment variable NAME is not set`. Prefer `passwordEnv` and keep the
@@ -120,8 +123,9 @@ h2c `Upgrade`.
 ### HTTP/3: TLS 1.3 inside QUIC
 
 QUIC carries its own TLS 1.3 handshake ([RFC 9001](https://www.rfc-editor.org/rfc/rfc9001));
-there is no TLS 1.2 for HTTP/3. `QUICListener` takes the same `TLSIdentity` and sets only the
-identity and the ALPN list (`h3`) on its security options. `TLSConfiguration`'s version range,
+there is no TLS 1.2 for HTTP/3. `QUICListener` takes the same `TLSIdentity` (or the same
+`TLSIdentityStore`, so a reload reaches both listeners) and sets only the identity and the
+ALPN list (`h3`) on its security options. `TLSConfiguration`'s version range,
 client certificates and handshake timeout apply to the TCP listener only.
 
 Browsers find HTTP/3 through `Alt-Svc`. The `AltSvc` middleware (HTTP3 target) adds
@@ -182,10 +186,22 @@ struct ShowTLS: HTTPMiddleware {
   (with TLS 1.3 the client may see this only as the connection ending after it thinks it is
   connected). The verified chain is not passed on to handlers; `ConnectionInfo` has no
   client-certificate field.
-- **Reload.** The identity is read once at startup. SIGHUP does not reload it: `tls` (including
-  the identity file) is a restart-only key. If the path is unchanged but the file was replaced
-  (a renewal), SIGHUP reports nothing and keeps the old certificate, so restart after every
-  renewal ([reload table](running-on-a-mac.md#shutdown-restart-and-reload)).
+- **Reload.** SIGHUP rereads the identity file (in memory only, like at startup), whether or
+  not `tls` changed in the config, so a renewal written over the same path is picked up without
+  a restart. New HTTPS and HTTP/3 handshakes present the new certificate; connections already
+  open keep the one they negotiated, and no listener is closed or rebound. stderr says which
+  happened: `reload: TLS identity PATH reloaded; new HTTPS and HTTP/3 handshakes use the new
+  certificate`, `reload: TLS identity PATH unchanged`, or `warning: reload: cannot load TLS
+  identity PATH: …; keeping the current TLS certificate` (bad file or password: the old
+  certificate stays). `tls.identity` and `tls.password` / `tls.passwordEnv` may change too (a
+  `passwordEnv` is read from the environment the server started with); adding or removing
+  `tls`, or changing `tls.port`, still needs a restart
+  ([reload table](running-on-a-mac.md#shutdown-restart-and-reload)). If the config file itself
+  fails to reload, the identity is not reread either.
+  In a custom server, build listeners from one `TLSIdentityStore` (`TLSConfiguration(identityStore:)`,
+  `QUICListener(configuration:identityStore:)`) and call `store.replace(with:)`: the listeners
+  ask the store for the identity on every handshake (`sec_protocol_options_set_challenge_block`),
+  because Network.framework fixes a listener's options when it is created.
 
 ### HSTS
 
@@ -224,7 +240,11 @@ SwiftWebServer itself speaks cleartext, `isSecure` is false; send the header fro
 ```bash
 scripts/make-test-identity.sh            # creates it if missing (idempotent)
 scripts/make-test-identity.sh --force    # replaces it
+scripts/make-test-identity.sh --name second   # a second identity in .test-identity/second/
 ```
+
+The second identity (`TestIdentity.load(name: "second")`) has its own key and certificate;
+the certificate-reload tests (#0140) swap between the two.
 
 It writes the gitignored `.test-identity/` folder at the repository root:
 
@@ -246,7 +266,7 @@ the identity is missing. A local CA for browser testing is still open work (#007
 
 See [A real certificate (Let's Encrypt)](running-on-a-mac.md#a-real-certificate-lets-encrypt):
 any ACME client that writes PEM files, HTTP-01 through `/.well-known/` on your site's root,
-then the conversion below and a restart on renewal.
+then the conversion below and a SIGHUP on renewal (write the new `.p12` over the old path).
 
 ### Tailscale
 

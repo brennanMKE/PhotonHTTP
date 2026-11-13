@@ -58,10 +58,16 @@ public final class QUICListener: Sendable {
     public let configuration: Configuration
 
     /// Creates the listener and installs its handlers. Nothing is bound until ``start()``.
-    public init(configuration: Configuration = Configuration(), identity: TLSIdentity) throws {
+    public convenience init(configuration: Configuration = Configuration(), identity: TLSIdentity) throws {
+        try self.init(configuration: configuration, identityStore: TLSIdentityStore(identity))
+    }
+
+    /// Takes the TLS identity from `identityStore` on every handshake, so replacing it changes
+    /// the certificate for new connections without restarting the listener (#0140).
+    public init(configuration: Configuration = Configuration(), identityStore: TLSIdentityStore) throws {
         self.configuration = configuration
         let quic = configuration.quic.makeOptions()
-        sec_protocol_options_set_local_identity(quic.securityProtocolOptions, identity.networkIdentity)
+        identityStore.install(on: quic.securityProtocolOptions)
         let parameters = NWParameters(quic: quic)
         parameters.allowLocalEndpointReuse = true
         parameters.includePeerToPeer = false

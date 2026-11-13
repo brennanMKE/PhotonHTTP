@@ -1,5 +1,7 @@
+import Dispatch
 import Foundation
 import Security
+import Synchronization
 
 /// A TLS server identity (certificate and private key) loaded from PKCS#12 **in memory only**
 /// (#0072; reused by the TLS listener in #0087 and by ``QUICListener``).
@@ -52,6 +54,40 @@ public struct TLSIdentity: @unchecked Sendable {
     public init(pkcs12Path path: String, password: String) throws(TLSIdentityError) {
         guard let data = FileManager.default.contents(atPath: path) else { throw .fileUnreadable(path: path) }
         try self.init(pkcs12: [UInt8](data), password: password)
+    }
+}
+
+/// The identity a TLS or QUIC listener presents, replaceable while the listener runs (#0140).
+///
+/// Network.framework fixes a listener's TLS options when the listener is created, so a
+/// `sec_protocol_options_set_local_identity` identity can never change. Instead the listener
+/// installs a challenge block (``install(on:)``) that Network.framework calls during each
+/// handshake; it hands over the identity current at that moment. ``replace(with:)`` therefore
+/// affects new handshakes only: established connections keep the certificate they negotiated,
+/// and nothing is closed or rebound. Share one store between the TCP (TLS) and QUIC listeners
+/// to swap both at once.
+public final class TLSIdentityStore: Sendable {
+    private let current: Mutex<TLSIdentity>
+
+    public init(_ identity: TLSIdentity) {
+        current = Mutex(identity)
+    }
+
+    /// The identity new handshakes use.
+    public var identity: TLSIdentity {
+        current.withLock { $0 }
+    }
+
+    /// Makes `identity` the one new handshakes present.
+    public func replace(with identity: TLSIdentity) {
+        current.withLock { $0 = identity }
+    }
+
+    /// Makes `options` ask this store for the identity on every handshake.
+    func install(on options: sec_protocol_options_t) {
+        sec_protocol_options_set_challenge_block(options, { [self] _, complete in
+            complete(identity.networkIdentity)
+        }, DispatchQueue.global())
     }
 }
 

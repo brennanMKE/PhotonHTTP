@@ -105,4 +105,20 @@ import Testing
         next.maxConnections = 3
         #expect(next.restartOnlyChanges(comparedTo: old) == ["port", "maxConnections"])
     }
+
+    /// #0140: the identity file and its password reload on SIGHUP; adding or removing `tls`
+    /// and its port need a restart.
+    @Test func tlsIdentityReloadsButItsPortNeedsARestart() {
+        var old = ServerSettings()
+        old.tls = .init(identity: "a.p12", password: .literal("x"), port: 8443)
+        var next = old
+        next.tls?.identity = "b.p12"
+        next.tls?.password = .environment("P12_PASSWORD")
+        #expect(next.restartOnlyChanges(comparedTo: old).isEmpty)
+        next.tls?.port = 9443
+        #expect(next.restartOnlyChanges(comparedTo: old) == ["tls.port"])
+        next.tls = nil
+        #expect(next.restartOnlyChanges(comparedTo: old) == ["tls"])
+        #expect(old.restartOnlyChanges(comparedTo: next) == ["tls"])
+    }
 }

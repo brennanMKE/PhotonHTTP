@@ -41,7 +41,8 @@ enum ServerMain {
         HTTP/2 and HTTP/3 are configured with the "tls", "http2" and "http3" keys. Prints "listening HOST:PORT"
         on stdout once bound (then "listening HOST:PORT (https)" and "(h3)" lines for the
         other listeners). SIGINT/SIGTERM shut down gracefully. SIGHUP reopens the access log and
-        reloads the configuration (listener, protocol and limit keys need a restart).
+        reloads the configuration and the TLS identity file (listener, protocol and limit
+        keys need a restart).
         """
 
     static func main() async {
@@ -141,8 +142,12 @@ enum ServerMain {
             try settings.validate()
             // #0127: SIGHUP rebuilds the chain from the config file and swaps it in.
             let handler = ReloadableHandler(try settings.makeHandler(environment: environment))
+            // #0140: the HTTPS and HTTP/3 listeners take the identity from this store on every
+            // handshake, so SIGHUP can swap in a renewed certificate without a restart.
+            let identityStore = try loadIdentity(settings, environment: environment).map(TLSIdentityStore.init)
             let reload: @Sendable () -> Void = {
-                Self.reload(handler, startup: settings, options: options, environment: environment) { next throws(ConfigFileError) in
+                Self.reload(handler, identity: identityStore, startup: settings, options: options,
+                            environment: environment) { next throws(ConfigFileError) in
                     try next.makeHandler(environment: environment)
                 }
             }
@@ -153,7 +158,7 @@ enum ServerMain {
                 throw ConfigFileError("\(error)")
             }
             let protocols = try ServerProtocols.make(settings)
-            let listeners = try makeListeners(settings, environment: environment)
+            let listeners = try makeListeners(settings, identity: identityStore)
             if settings.hosts.isEmpty {
                 printError("\(name): serving \(settings.resolvedRoot)")
             } else {
@@ -188,9 +193,12 @@ enum ServerMain {
     /// by their paths either way, for log rotation. Listener, protocol and connection-limit
     /// keys need a restart: a change to them is reported and ignored. A configuration that
     /// does not load or build is reported and the running one stays.
+    ///
+    /// The TLS identity file is reread too (#0140), even when `tls` is unchanged, since a
+    /// renewal usually replaces the file at the same path: see ``reloadIdentity(_:settings:environment:)``.
     static func reload<H: HTTPHandler>(
-        _ handler: ReloadableHandler<H>, startup: ServerSettings, options: Options, environment: [String: String],
-        build: (ServerSettings) throws(ConfigFileError) -> H
+        _ handler: ReloadableHandler<H>, identity: TLSIdentityStore?, startup: ServerSettings, options: Options,
+        environment: [String: String], build: (ServerSettings) throws(ConfigFileError) -> H
     ) {
         printError("\(name): signal \(SIGHUP), reloading the configuration")
         do {
@@ -200,6 +208,7 @@ enum ServerMain {
             // The old chains' remaining lines go to the reopened file too.
             handler.reopenAccessLogs()
             handler.replace(with: chain)
+            if let identity { reloadIdentity(identity, settings: next, environment: environment) }
             let ignored = next.restartOnlyChanges(comparedTo: startup)
             if !ignored.isEmpty {
                 printError("\(name): warning: reload: \(ignored.joined(separator: ", ")) changed; needs a restart, ignored")
@@ -211,10 +220,46 @@ enum ServerMain {
         }
     }
 
+    /// Imports the `tls` identity in memory only (`kSecImportToMemoryOnly`: no keychain
+    /// access, AGENTS.md), or returns `nil` without `tls`.
+    static func loadIdentity(_ settings: ServerSettings, environment: [String: String]) throws(ConfigFileError) -> TLSIdentity? {
+        guard settings.tls != nil, let path = settings.resolvedIdentityPath,
+              let password = try settings.tlsPassword(environment: environment) else { return nil }
+        do {
+            return try TLSIdentity(pkcs12Path: path, password: password)
+        } catch {
+            throw ConfigFileError(key: "tls.identity", "cannot load TLS identity \(path): \(error)")
+        }
+    }
+
+    /// SIGHUP (#0140): rereads the identity file named by `settings` and, when its certificate
+    /// differs, makes the running HTTPS and HTTP/3 listeners present it to new handshakes.
+    /// Established connections keep the certificate they negotiated. If the file cannot be
+    /// loaded, the current identity stays and a warning says why. Every outcome is printed.
+    static func reloadIdentity(_ store: TLSIdentityStore, settings: ServerSettings, environment: [String: String]) {
+        guard settings.tls != nil else { return }   // removing `tls` is reported as restart-only
+        let path = settings.resolvedIdentityPath ?? "?"
+        let identity: TLSIdentity
+        do {
+            guard let loaded = try loadIdentity(settings, environment: environment) else { return }
+            identity = loaded
+        } catch {
+            printError("\(name): warning: reload: \(error.description); keeping the current TLS certificate")
+            return
+        }
+        if identity.certificateDER == store.identity.certificateDER {
+            printError("\(name): reload: TLS identity \(path) unchanged")
+        } else {
+            store.replace(with: identity)
+            printError("\(name): reload: TLS identity \(path) reloaded; new HTTPS and HTTP/3 handshakes use the new certificate")
+        }
+    }
+
     /// Cleartext first, then TLS, then QUIC: the server binds them in this order, so the QUIC
     /// listener can take the TLS listener's port number when that was 0. The TLS listener
-    /// offers the protocol registry's ALPN tokens (#0088).
-    static func makeListeners(_ settings: ServerSettings, environment: [String: String]) throws -> [ServerListener] {
+    /// offers the protocol registry's ALPN tokens (#0088). Both secure listeners present the
+    /// identity in `identity` (#0140).
+    static func makeListeners(_ settings: ServerSettings, identity: TLSIdentityStore?) throws -> [ServerListener] {
         // POSIX sockets by default, Network.framework on request (#0113).
         let tcp = TCPConfiguration(allowLocalEndpointReuse: false)
         let host = settings.host
@@ -225,19 +270,10 @@ enum ServerMain {
         case .nw:
             listeners.append(.byteStream(try TCPListener(configuration: .init(host: host, port: settings.port, tcp: tcp)), name: "http"))
         }
-        guard let tls = settings.tls, let path = settings.resolvedIdentityPath,
-              let password = try settings.tlsPassword(environment: environment) else { return listeners }
-
-        // In memory only (kSecImportToMemoryOnly): no keychain access (AGENTS.md).
-        let identity: TLSIdentity
-        do {
-            identity = try TLSIdentity(pkcs12Path: path, password: password)
-        } catch {
-            throw ConfigFileError(key: "tls.identity", "cannot load TLS identity \(path): \(error)")
-        }
+        guard let tls = settings.tls, let identity else { return listeners }
         listeners.append(.byteStream(name: "https") { bind in
             try TCPListener(configuration: .init(host: host, port: tls.port, tcp: tcp),
-                            tls: TLSConfiguration(identity: identity, alpn: bind.alpnTokens))
+                            tls: TLSConfiguration(identityStore: identity, alpn: bind.alpnTokens))
         })
 
         if let http3 = settings.http3 {
@@ -253,7 +289,7 @@ enum ServerMain {
             listeners.append(.multiplexed(name: "h3", protocol: HTTP3(configuration: configuration)) { bind in
                 let port = http3.port ?? bind.boundAddresses[tlsIndex].port
                 return try QUICListener(configuration: .init(host: host, port: port, quic: QUICConfiguration(alpn: bind.alpnTokens)),
-                                        identity: identity)
+                                        identityStore: identity)
             })
             #else
             _ = http3
