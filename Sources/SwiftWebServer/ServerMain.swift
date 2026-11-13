@@ -44,12 +44,13 @@ enum ServerMain {
         reloads the configuration and the TLS identity file. The server also watches the
         config file and the files it names and reloads when they change ("reload": {"watch":
         true, "interval": 2}). A reload that changes listener, protocol or limit keys is
-        rejected whole; they need a restart. The server writes its status to run/status.json
-        next to the config ("statusFile").
+        rejected whole; they need a restart. SIGUSR2 restarts gracefully in the same process:
+        new listeners on the same ports start accepting, then the old ones drain. The server
+        writes its status to run/status.json next to the config ("statusFile").
 
                SwiftWebServer check | reload | status | restart [--config FILE] ...
 
-        check a config, reload the running server, show its status (see
+        check a config, reload or restart the running server, show its status (see
         `SwiftWebServer check --help`).
         """
 
@@ -167,22 +168,15 @@ enum ServerMain {
             let loaded = try loadSettings(options, environment: environment)
             let settings = loaded.settings
             try settings.validate()
-            // #0127: SIGHUP rebuilds the chain from the config file and swaps it in.
-            let handler = ReloadableHandler(try settings.makeHandler(environment: environment))
             // #0140: the HTTPS and HTTP/3 listeners take the identity from this store on every
             // handshake, so SIGHUP can swap in a renewed certificate without a restart.
             let identityStore = try loadIdentity(settings, environment: environment).map(TLSIdentityStore.init)
-            // #0142: SIGHUP and the file watcher both reload through it, one at a time.
+            // #0144: what a graceful restart replaces.
+            let running = RunningState(settings: settings, identity: identityStore)
             let configPath = configPath(options, environment: environment)
             // #0143: the status file the control commands read; only with a config file.
             let status = StatusRecorder(config: configPath, sha256: loaded.sha256, arguments: arguments,
                                         settings: settings)
-            let reloader = ConfigReloader(plan: settings.watchPlan(configPath: configPath)) { trigger in
-                Self.reload(handler, identity: identityStore, startup: settings, options: options,
-                            environment: environment, trigger: trigger, status: status) { next throws(ConfigFileError) in
-                    try next.makeHandler(environment: environment)
-                }.map { $0.watchPlan(configPath: configPath) }
-            }
             let configuration = settings.serverConfiguration
             do {
                 try configuration.validate()
@@ -199,21 +193,41 @@ enum ServerMain {
                     printError("\(name): serving \(names.joined(separator: ", ")) from \(ServerSettings.resolve(host.root, against: settings.baseDirectory))")
                 }
             }
+            let launch = Launch(options: options, environment: environment, arguments: arguments,
+                                configPath: configPath, status: status, running: running)
             #if HTTP3
             if let http3 = settings.http3 {
                 // #0103: HTTPS responses advertise HTTP/3. Registered only with HTTP/3, so the
                 // chain has no Alt-Svc step otherwise; rendered once the UDP port is bound.
-                let altSvc = AltSvc(maxAge: http3.altSvcMaxAge)
-                let chain = MiddlewareBuilder.build {
-                    altSvc
-                    handler
-                }
-                return await serve(settings, listeners: listeners, protocols: protocols, handler: chain, reloader: reloader, status: status) { addresses, names in
-                    if let index = names.firstIndex(of: "h3") { altSvc.advertise(port: addresses[index].port) }
+                // Inside the reloadable chain (#0144), so a restart that moves the UDP port
+                // swaps in a new advertisement.
+                let altSvc = AltSvcSlot(AltSvc(maxAge: http3.altSvcMaxAge))
+                let inner = try settings.makeHandler(environment: environment)
+                let first = altSvc.current
+                let handler = ReloadableHandler(MiddlewareBuilder.build {
+                    first
+                    inner
+                })
+                return await launch.serve(settings, listeners: listeners, protocols: protocols, handler: handler,
+                                          advertisesHTTP3: true) { next, restart throws(ConfigFileError) in
+                    let inner = try next.makeHandler(environment: environment)
+                    let advertisement = restart ? AltSvc(maxAge: next.http3?.altSvcMaxAge ?? 0) : altSvc.current
+                    if restart { altSvc.prepare(advertisement) }
+                    return MiddlewareBuilder.build {
+                        advertisement
+                        inner
+                    }
+                } bound: { addresses, names, restart in
+                    if restart { altSvc.commit() }
+                    if let index = names.firstIndex(of: "h3") { altSvc.current.advertise(port: addresses[index].port) }
                 }
             }
             #endif
-            return await serve(settings, listeners: listeners, protocols: protocols, handler: handler, reloader: reloader, status: status)
+            let handler = ReloadableHandler(try settings.makeHandler(environment: environment))
+            return await launch.serve(settings, listeners: listeners, protocols: protocols, handler: handler,
+                                      advertisesHTTP3: false) { next, _ throws(ConfigFileError) in
+                try next.makeHandler(environment: environment)
+            }
         } catch {
             printError("\(name): \(error)")
             return 1
@@ -314,18 +328,22 @@ enum ServerMain {
         // POSIX sockets by default, Network.framework on request (#0113).
         let tcp = TCPConfiguration(allowLocalEndpointReuse: false)
         let host = settings.host
+        // #0144: each listener names its address, so a graceful restart keeps it served.
+        func at(_ port: UInt16) -> TransportAddress { TransportAddress(host: host, port: port) }
         var listeners: [ServerListener] = []
         switch settings.transport {
         case .bsd:
-            listeners.append(.byteStream(try BSDSocketListener(configuration: .init(host: host, port: settings.port, tcp: tcp)), name: "http"))
+            listeners.append(.byteStream(try BSDSocketListener(configuration: .init(host: host, port: settings.port, tcp: tcp)), name: "http")
+                .restartable(address: at(settings.port), identity: "http"))
         case .nw:
-            listeners.append(.byteStream(try TCPListener(configuration: .init(host: host, port: settings.port, tcp: tcp)), name: "http"))
+            listeners.append(.byteStream(try TCPListener(configuration: .init(host: host, port: settings.port, tcp: tcp)), name: "http")
+                .restartable(address: at(settings.port), identity: "http nw"))
         }
         guard let tls = settings.tls, let identity else { return listeners }
-        listeners.append(.byteStream(name: "https") { bind in
+        listeners.append(ServerListener.byteStream(name: "https") { bind in
             try TCPListener(configuration: .init(host: host, port: tls.port, tcp: tcp),
                             tls: TLSConfiguration(identityStore: identity, alpn: bind.alpnTokens))
-        })
+        }.restartable(address: at(tls.port), identity: "https"))
 
         if let http3 = settings.http3 {
             #if HTTP3
@@ -337,83 +355,17 @@ enum ServerMain {
             configuration.timeouts.closeLinger = max(.seconds(1), settings.drainTimeout ?? .seconds(30))
             configuration.qpackMaxTableCapacity = http3.qpackMaxTableCapacity
             configuration.qpackBlockedStreams = http3.qpackBlockedStreams
-            listeners.append(.multiplexed(name: "h3", protocol: HTTP3(configuration: configuration)) { bind in
+            listeners.append(ServerListener.multiplexed(name: "h3", protocol: HTTP3(configuration: configuration)) { bind in
                 let port = http3.port ?? bind.boundAddresses[tlsIndex].port
                 return try QUICListener(configuration: .init(host: host, port: port, quic: QUICConfiguration(alpn: bind.alpnTokens)),
                                         identityStore: identity)
-            })
+            }.restartable(address: at(http3.port ?? tls.port), identity: "h3"))
             #else
             _ = http3
             throw ConfigFileError(key: "http3", "\"http3\": this build has no HTTP/3 (package trait HTTP3 is off)")
             #endif
         }
         return listeners
-    }
-
-    /// Runs the server until a signal stops it. `onBound` runs once every listener is bound,
-    /// before the `listening` lines are printed, with the addresses and listener names.
-    static func serve<H: HTTPHandler>(
-        _ settings: ServerSettings, listeners: [ServerListener], protocols: [any ConnectionProtocol], handler: H,
-        reloader: ConfigReloader? = nil, status: StatusRecorder? = nil,
-        onBound: @escaping @Sendable ([TransportAddress], [String]) -> Void = { _, _ in }
-    ) async -> Int32 {
-        let server = Server(configuration: settings.serverConfiguration, listeners: listeners,
-                            protocols: protocols, components: reloader.map { [$0] } ?? [],
-                            handler: handler)
-
-        // Ignore the default actions first, so a signal is never fatal, then route both to a
-        // graceful shutdown (#0003). The sources live until the server stops. A second signal
-        // during the drain is harmless (#0005).
-        let queue = DispatchQueue(label: "sws.signals")
-        let sources = [SIGINT, SIGTERM].map { number -> any DispatchSourceSignal in
-            signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
-            source.setEventHandler {
-                printError("\(name): signal \(number), shutting down")
-                server.requestShutdown()
-            }
-            source.resume()
-            return source
-        }
-        // SIGHUP (#0127): asks the reloader, which runs reloads one at a time with the file
-        // watcher's (#0142). Ignored first, so the default action (terminate) never runs.
-        var hangup: (any DispatchSourceSignal)?
-        if let reloader {
-            signal(SIGHUP, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: queue)
-            source.setEventHandler { if case .running = server.lifecycleState { reloader.requestReload() } }
-            source.resume()
-            hangup = source
-        }
-        defer {
-            for source in sources { source.cancel() }
-            hangup?.cancel()
-        }
-
-        do {
-            try await withThrowingDiscardingTaskGroup { group in
-                group.addTask {
-                    let addresses = try await server.waitUntilRunning()
-                    let names = server.listenerStatistics.map(\.name)
-                    onBound(addresses, names)
-                    status?.running(listening: addresses.map { "\($0)" })
-                    for (index, address) in addresses.enumerated() {
-                        // The cleartext line stays "listening HOST:PORT" (scripts parse it).
-                        let suffix = index == 0 || index >= names.count ? "" : " (\(names[index]))"
-                        FileHandle.standardOutput.write(Data("listening \(address)\(suffix)\n".utf8))
-                    }
-                }
-                group.addTask { try await server.run() }
-            }
-        } catch is CancellationError where server.lifecycleState == .stopped {
-            // Stopped before it was running; waitUntilRunning reports that as cancellation.
-        } catch {
-            printError("\(name): cannot serve on \(settings.host):\(ports(settings)): \(describe(error))")
-            return 1
-        }
-        status?.stopped()
-        printError("\(name): stopped")
-        return 0
     }
 
     /// The configured ports, for error messages: `8080`, or `8080, https 8443, h3 8443`.
@@ -428,6 +380,15 @@ enum ServerMain {
 
     /// A transport error with its POSIX meaning (`failed(code: 48)` reads "address already in use").
     static func describe(_ error: any Error) -> String {
+        if let restart = error as? ServerRestartError {
+            var text = "listener \(restart.listener)"
+            if let address = restart.address { text += " on \(address)" }
+            text += ": \(describe(restart.underlying))"
+            if let closed = restart.closedRunningListener {
+                return text + "; the running listener \(closed) had to close first and no longer serves"
+            }
+            return text
+        }
         if case TransportError.failed(let code) = error, code > 0 {
             return "\(String(cString: strerror(code))) (errno \(code))"
         }

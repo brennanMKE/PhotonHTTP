@@ -23,6 +23,14 @@ import Synchronization
 /// Binds a numeric ``Configuration/host`` (loopback by default, which never triggers the
 /// application firewall prompt; see AGENTS.md). Port 0 picks a free port; ``start()`` returns
 /// the actual port.
+///
+/// ## Port sharing (#0144)
+///
+/// A graceful restart binds a new listener on this one's port while this one still accepts:
+/// ``setPortSharing(_:)`` turns `SO_REUSEPORT` on for both (the new one before it binds), and
+/// off again once it is bound, so any other bind of the port still fails with `EADDRINUSE`.
+/// The kernel sends new connections to the newest socket; ``closeAfterPending()`` then hands
+/// out what is queued on this one before ``connections`` ends.
 public final class BSDSocketListener: Sendable {
     public struct Configuration: Sendable, Hashable {
         /// Numeric address to bind (`127.0.0.1`, `::1`, or `0.0.0.0` for all interfaces).
@@ -55,6 +63,10 @@ public final class BSDSocketListener: Sendable {
         var localAddress: TransportAddress?
         var closed = false
         var accepted = 0
+        /// Bind with `SO_REUSEPORT` (``setPortSharing(_:)`` before ``start()``, #0144).
+        var sharesPort = false
+        /// Connections ``closeAfterPending()`` took from the kernel's queue, not yet handed out.
+        var pending: [BSDSocketTransport] = []
     }
 
     public let configuration: Configuration
@@ -94,6 +106,9 @@ public final class BSDSocketListener: Sendable {
             if configuration.tcp.allowLocalEndpointReuse {
                 BSDSocket.setOption(fd, SOL_SOCKET, SO_REUSEADDR, 1)
             }
+            if state.sharesPort {
+                BSDSocket.setOption(fd, SOL_SOCKET, SO_REUSEPORT, 1)
+            }
             if BSDSocket.setNonBlocking(fd) != 0 { throw fail(errno) }
             var bindAddress = address
             let bound = withUnsafePointer(to: &bindAddress) {
@@ -123,25 +138,98 @@ public final class BSDSocketListener: Sendable {
     public var connections: Connections { Connections(listener: self) }
 
     /// Stops listening and ends ``connections``. Connections still in the kernel's listen
-    /// queue are reset; connections already taken are unaffected. Idempotent.
+    /// queue are reset (and those ``closeAfterPending()`` took and nobody took from it are
+    /// closed); connections already taken are unaffected. Idempotent.
     public func close() async {
-        let core = state.withLock { state -> SocketCore? in
+        let (core, pending) = state.withLock { state -> (SocketCore?, [BSDSocketTransport]) in
             state.closed = true
-            return state.core
+            defer { state.pending = [] }
+            return (state.core, state.pending)
         }
         core?.requestClose(abortive: false)
+        for transport in pending { await transport.close(.shutdown) }
+    }
+
+    // MARK: Port sharing (#0144)
+
+    /// `SO_REUSEPORT` for a graceful restart: before ``start()``, bind with it; after, set or
+    /// clear it on the listening socket. With it set on both, a replacement listener binds
+    /// this address and the kernel sends it every new connection; with it clear (the
+    /// default), any other bind of the address fails with `EADDRINUSE`, as without sharing.
+    public func setPortSharing(_ enabled: Bool) {
+        let core = state.withLock { state -> SocketCore? in
+            state.sharesPort = enabled
+            return state.core
+        }
+        guard let core, let fd = core.acquire() else { return }
+        BSDSocket.setOption(fd, SOL_SOCKET, SO_REUSEPORT, enabled ? 1 : 0)
+        core.release()
+    }
+
+    /// Takes every connection the kernel has completed on this socket, closes the listening
+    /// socket, and lets ``connections`` hand those out before it ends. For a graceful restart
+    /// once a replacement shares the port (``setPortSharing(_:)``): the kernel then queues new
+    /// connections on the replacement only, so nothing queued here is reset.
+    public func closeAfterPending() async {
+        let core = state.withLock { state -> SocketCore? in
+            state.closed ? nil : state.core
+        }
+        guard let core else { return await close() }
+        var taken: [BSDSocketTransport] = []
+        if let fd = core.acquire() {
+            while let transport = acceptNow(fd) { taken.append(transport) }
+            core.release()
+        }
+        state.withLock { state in
+            state.closed = true
+            state.pending += taken
+        }
+        // Wakes a consumer waiting for the socket; it then takes `pending`.
+        core.requestClose(abortive: false)
+    }
+
+    private func popPending() -> BSDSocketTransport? {
+        state.withLock { state in state.pending.isEmpty ? nil : state.pending.removeFirst() }
+    }
+
+    /// One `accept` on the non-blocking socket: a connection, or `nil` when none is queued (or
+    /// the call failed).
+    private func acceptNow(_ listenFD: Int32) -> BSDSocketTransport? {
+        while true {
+            var peer = sockaddr_storage()
+            var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let fd = withUnsafeMutablePointer(to: &peer) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.accept(listenFD, $0, &length) }
+            }
+            if fd >= 0 { return makeTransport(fd, peer: peer, localAddress: state.withLock { $0.localAddress }) }
+            if errno == EINTR || errno == ECONNABORTED { continue }
+            return nil
+        }
+    }
+
+    private func makeTransport(_ fd: Int32, peer: sockaddr_storage, localAddress: TransportAddress?) -> BSDSocketTransport {
+        let acceptedAt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        _ = BSDSocket.setNonBlocking(fd)
+        BSDSocket.configureConnection(fd, configuration.tcp)
+        let info = ConnectionInfo(
+            localAddress: isWildcard ? BSDSocket.localAddress(fd) : localAddress,
+            remoteAddress: BSDSocket.transportAddress(peer))
+        state.withLock { $0.accepted += 1 }
+        let connectionCore = SocketCore(fd: fd, loop: BSDEventLoop.next(), closesOnCancel: true)
+        return BSDSocketTransport(core: connectionCore, info: info, acceptedAt: acceptedAt)
     }
 
     // MARK: Accept
 
     func next() async throws -> BSDSocketTransport? {
+        if let transport = popPending() { return transport }
         let (core, localAddress) = state.withLock { ($0.core, $0.localAddress) }
         guard let core else {
             if state.withLock({ $0.closed }) { return nil }
             throw TransportError.closed   // not started
         }
         while true {
-            guard let listenFD = core.acquire() else { return nil }
+            guard let listenFD = core.acquire() else { return popPending() }
             var peer = sockaddr_storage()
             var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let fd = withUnsafeMutablePointer(to: &peer) {
@@ -149,17 +237,7 @@ public final class BSDSocketListener: Sendable {
             }
             let code = errno
             core.release()
-            if fd >= 0 {
-                let acceptedAt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-                _ = BSDSocket.setNonBlocking(fd)
-                BSDSocket.configureConnection(fd, configuration.tcp)
-                let info = ConnectionInfo(
-                    localAddress: isWildcard ? BSDSocket.localAddress(fd) : localAddress,
-                    remoteAddress: BSDSocket.transportAddress(peer))
-                state.withLock { $0.accepted += 1 }
-                let connectionCore = SocketCore(fd: fd, loop: BSDEventLoop.next(), closesOnCancel: true)
-                return BSDSocketTransport(core: connectionCore, info: info, acceptedAt: acceptedAt)
-            }
+            if fd >= 0 { return makeTransport(fd, peer: peer, localAddress: localAddress) }
             switch code {
             case EINTR, ECONNABORTED:
                 continue
@@ -167,14 +245,14 @@ public final class BSDSocketListener: Sendable {
                 switch await core.wait(.read) {
                 case .ready: continue
                 case .cancelled: throw CancellationError()
-                case .closed: return nil
+                case .closed: return popPending()
                 }
             case EMFILE, ENFILE, ENOBUFS, ENOMEM:
                 // Out of descriptors or memory: leave the connection queued and retry shortly
                 // rather than failing the listener.
                 try await Task.sleep(for: .milliseconds(10))
             default:
-                if state.withLock({ $0.closed }) { return nil }
+                if state.withLock({ $0.closed }) { return popPending() }
                 throw TransportError(errno: code)
             }
         }
@@ -202,6 +280,8 @@ public final class BSDSocketListener: Sendable {
         }
     }
 }
+
+extension BSDSocketListener: PortSharingListener {}
 
 extension BSDSocketListener: TransportListener {
     /// Binds and starts listening; returns the bound address.

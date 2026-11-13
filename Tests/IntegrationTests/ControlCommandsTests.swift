@@ -111,10 +111,10 @@ import Testing
         #expect(output.status == 1)
         #expect(output.stdout.contains("invalid") && output.stdout.contains("Missing"), "\(output.stdout)")
 
-        // `restart` is #0144: it says how to restart for now.
+        // `restart` (#0144) checks first: an invalid file is not signalled.
         output = try await command(["restart", "--config", config.path])
         #expect(output.status == 1)
-        #expect(output.stderr.contains("#0144"))
+        #expect(output.stderr.contains("not restarting: the config is not valid"), "\(output.stderr)")
 
         server.signal(SIGTERM)
         #expect(try await server.waitForExit(timeout: .seconds(10)) == 0, "\(server.stderr)")

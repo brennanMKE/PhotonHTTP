@@ -2,7 +2,7 @@ import CommonCrypto
 public import Foundation
 
 /// The running server's status file (#0143): written by the server at startup, after every
-/// reload and at exit, read by `SwiftWebServer check`, `reload` and `status`. There is no
+/// reload and restart (#0144) and at exit, read by `SwiftWebServer check`, `reload` and `status`. There is no
 /// control socket: the CLI signals the pid and reads this file.
 ///
 /// Written atomically (a temporary file renamed into place) with mode 0600. It holds no
@@ -14,7 +14,7 @@ public struct ServerStatus: Codable, Sendable, Equatable {
         case stopped
     }
 
-    /// The outcome of a reload.
+    /// The outcome of a reload, or of a graceful restart (trigger `restart`, #0144).
     public enum Result: String, Codable, Sendable {
         /// The new configuration runs.
         case reloaded
@@ -22,11 +22,14 @@ public struct ServerStatus: Codable, Sendable, Equatable {
         case failed
         /// It changes keys that need a restart; the running configuration stays, whole.
         case rejected
+        /// A graceful restart applied the whole configuration (#0144). A restart that fails
+        /// records ``failed``.
+        case restarted
     }
 
     public struct Reload: Codable, Sendable, Equatable {
         public var time: Date
-        /// `signal` or `watch`.
+        /// `signal` or `watch`, or `restart` for a graceful restart (#0144).
         public var trigger: String
         public var result: Result
         /// One line: what happened, or why not.
@@ -60,7 +63,7 @@ public struct ServerStatus: Codable, Sendable, Equatable {
     public var listening: [String]
     /// ``ServerSettings/settingDigests`` of the running configuration.
     public var settings: [String: String]
-    /// Reloads attempted so far.
+    /// Reloads and restarts attempted so far.
     public var reloads: Int
     public var lastReload: Reload?
     /// Restart-only keys changed in the config file but not applied: the last reload was
@@ -68,6 +71,8 @@ public struct ServerStatus: Codable, Sendable, Equatable {
     public var restartRequired: [String]
     /// When this file was written.
     public var updated: Date
+    /// When the last graceful restart (#0144) applied a configuration; `nil` before one.
+    public var restarted: Date?
 
     public init(state: State = .running, pid: Int32, started: Date, config: String?, configSHA256: String?,
                 arguments: [String], listening: [String] = [], settings: [String: String], reloads: Int = 0,

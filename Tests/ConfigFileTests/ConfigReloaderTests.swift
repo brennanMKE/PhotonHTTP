@@ -139,6 +139,37 @@ import Testing
         }
     }
 
+    /// #0144: a restart runs on the reloader's task, after the reload asked for before it and
+    /// never beside one; its plan is watched from then on.
+    @Test(.timeLimit(.minutes(1)))
+    func aRestartRunsInTurnWithReloads() async throws {
+        let directory = try Directory()
+        try directory.write("http-config.json", "{}")
+        let config = directory.path("http-config.json")
+        let other = directory.path("other.txt")
+        let order = Mutex<[String]>([])
+        let busy = Mutex(false)
+        let reloader = ConfigReloader(plan: .init(paths: [config], watch: false, interval: .milliseconds(20))) { _ in
+            let overlapping = busy.withLock { $0 }
+            order.withLock { $0.append(overlapping ? "overlap" : "reload") }
+            return nil
+        } restart: {
+            busy.withLock { $0 = true }
+            try? await Task.sleep(for: .milliseconds(50))
+            busy.withLock { $0 = false }
+            order.withLock { $0.append("restart") }
+            return .init(paths: [config, other], watch: false, interval: .milliseconds(20))
+        }
+        try await running(reloader) {
+            reloader.requestReload()
+            reloader.requestRestart()
+            reloader.requestReload()
+            try await eventually { order.withLock { $0.count } == 3 }
+            #expect(order.withLock { $0 } == ["reload", "restart", "reload"])
+            #expect(reloader.currentPlan.paths == [config, other])
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func withWatchOffOnlyASignalReloads() async throws {
         let directory = try Directory()
