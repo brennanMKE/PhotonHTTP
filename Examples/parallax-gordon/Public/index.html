@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SwiftWebServer on gordon</title>
+<title>PhotonHTTP on gordon</title>
 <style>
   :root { --bg: #fafaf8; --fg: #1d1d1f; --muted: #6e6e73; --card: #fff; --line: #e3e3e0; --accent: #0a6cff; --ok: #1a7f37; --bad: #c62828; --code: #f2f2ef; }
   @media (prefers-color-scheme: dark) { :root { --bg: #111113; --fg: #ececf0; --muted: #9a9aa2; --card: #1a1a1d; --line: #2c2c31; --accent: #5aa0ff; --ok: #4cc26a; --bad: #ff6b6b; --code: #222226; } }
@@ -35,7 +35,7 @@
   label { font-size: .85rem; color: var(--muted); }
 </style>
 <main>
-  <h1>SwiftWebServer on gordon</h1>
+  <h1>PhotonHTTP on gordon</h1>
   <p class="lead">A dependency-free Swift HTTP server serving this page from disk and reverse-proxying two
     <strong>System 1 decision models</strong> on this Mac mini's loopback. It is the only process on the tailnet:
     it checks the bearer key, forwards, health-checks the backends and logs every request.</p>
@@ -55,7 +55,7 @@
     <tr><td><code>POST /laya/predict</code></td><td>laya-go <code>/predict</code></td><td>Bearer</td></tr>
     <tr><td><code>GET /decision/health</code></td><td>laya-swift <code>/health</code></td><td>—</td></tr>
     <tr><td><code>POST /decision/v1/decisions</code></td><td>laya-swift <code>/v1/decisions</code></td><td>Bearer</td></tr>
-    <tr><td><code>GET /metrics</code></td><td>SwiftWebServer itself</td><td>—</td></tr>
+    <tr><td><code>GET /metrics</code></td><td>PhotonHTTP itself</td><td>—</td></tr>
   </table>
 
   <h2>Try it</h2>

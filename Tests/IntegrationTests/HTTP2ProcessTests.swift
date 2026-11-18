@@ -2,7 +2,7 @@ import Foundation
 import HTTPTestSupport
 import Testing
 
-/// The shipped `SwiftWebServer` serving HTTP/2 from its config (#0119), launched as a child
+/// The shipped `PhotonHTTP` serving HTTP/2 from its config (#0119), launched as a child
 /// process on 127.0.0.1 with every port 0 and the in-memory test identity. Clients are the
 /// system curl (nghttp2), run through `ChildProcess`.
 @Suite struct HTTP2ProcessTests {

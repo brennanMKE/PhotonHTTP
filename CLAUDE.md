@@ -1,4 +1,4 @@
-# SwiftWebServer — guidance for Claude
+# PhotonHTTP — guidance for Claude
 
 **Read `AGENTS.md` first: it lists actions that trigger macOS system prompts (keychain, firewall, privacy, sudo), which are forbidden, and requires running servers/tests through `scripts/guarded.sh`.**
 

@@ -52,7 +52,7 @@ ALPN and runs HTTP/2 only when TLS negotiated `h2`; every other connection runs 
 With a single protocol registered, cleartext connections are neither sniffed nor wrapped in a
 replay transport, so the cleartext path costs what `HTTP1` alone costs. The shipped executable
 registers exactly this unless `"http2": {"cleartext": true}`; with `"http2": false` it
-registers `[HTTP1]` ([ServerProtocols.swift](../../Sources/SwiftWebServer/ServerProtocols.swift)).
+registers `[HTTP1]` ([ServerProtocols.swift](../../Sources/Photon/ServerProtocols.swift)).
 [Choosing components](choosing-components.md#https-http2-and-http3-in-swift) shows the Swift
 side.
 
@@ -323,7 +323,7 @@ builds too (`HTTPFieldValidation`, #0136): each field name must be a token, and 
 or custom reason phrase may hold CR, LF, NUL, another control byte or DEL (a tab is fine). A
 response that fails is never written as is: it is replaced with a bare `500` with
 `connection: close`, like a handler that throws, and an error is logged (`os` log, subsystem
-`SwiftWebServer`, category `HTTP`). So a handler that copies decoded request bytes into a
+`PhotonHTTP`, category `HTTP`). So a handler that copies decoded request bytes into a
 `location` cannot split the response, but it gets a `500`; validate or encode such values to
 answer properly. HTTP/2 and HTTP/3 run the same check and answer the stream with a bare `500`.
 Code that serializes responses itself uses `HTTP1Serializer.writeValidated`, which throws

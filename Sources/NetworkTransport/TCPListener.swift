@@ -244,7 +244,7 @@ extension TCPListener {
         /// The listener's queue, for the handshake timers.
         let queue: DispatchQueue
 
-        static let log = Logger(subsystem: "SwiftWebServer", category: "TLS")
+        static let log = Logger(subsystem: "PhotonHTTP", category: "TLS")
 
         init(limit: Int, handshakeTimeout: Duration?, queue: DispatchQueue) {
             self.limit = limit

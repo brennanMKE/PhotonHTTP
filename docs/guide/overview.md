@@ -1,13 +1,13 @@
 # Overview and architecture
 
-SwiftWebServer is an HTTP/1.1, HTTP/2 and HTTP/3 server for **macOS 15 or later**, written in
+PhotonHTTP is an HTTP/1.1, HTTP/2 and HTTP/3 server for **macOS 15 or later**, written in
 Swift 6 with strict concurrency and **no package dependencies**. It uses Darwin (POSIX sockets,
 kqueue, `sendfile(2)`, zlib, libcompression) and Network.framework (TLS, QUIC). It is not built
 or tested on Linux.
 
 It comes in two forms:
 
-- **The `SwiftWebServer` executable**: one binary configured by a JSON file
+- **The `photon` executable**: one binary configured by a JSON file
   (`http-config.json`). It serves static files and reverse-proxies paths to local apps, over
   cleartext HTTP/1.1, HTTPS (HTTP/1.1 and HTTP/2) and HTTP/3 at once. See
   [Running on a Mac](running-on-a-mac.md).
@@ -29,7 +29,7 @@ target. A component that is not registered is not in the compiled request path a
 | Protocols | `HPACK` + `HTTP2`, `QPACK` + `HTTP3` (both on `HeaderCompression`), `WebSockets` | Optional protocols |
 | Components | `StaticFiles` (includes `ErrorPages`), `Compression`, `VirtualHosts`, `Auth`, `AccessLog`, `Router`, `Proxy` | Optional request-path features |
 | Glue | `ConfigFile` | `http-config.json` → settings → listeners, protocols and middleware chain (uses Foundation, startup only) |
-| Tools | `SwiftWebServer`, `sws-bench`, `HTTPTestSupport` | The shipped server, the benchmark harness, in-memory test transports |
+| Tools | `photon`, `sws-bench`, `HTTPTestSupport` | The shipped server, the benchmark harness, in-memory test transports |
 
 The [component table](choosing-components.md#targets-and-products) lists dependencies and when
 to include each one.

@@ -1,6 +1,6 @@
 # HTTP/3
 
-SwiftWebServer serves HTTP/3 (RFC 9114) over QUIC. It has no QUIC stack of its own: QUIC,
+PhotonHTTP serves HTTP/3 (RFC 9114) over QUIC. It has no QUIC stack of its own: QUIC,
 TLS 1.3, loss recovery and congestion control come from Network.framework (`NWProtocolQUIC`).
 HTTP/3 framing, stream handling and QPACK header compression are written in Swift in the
 `HTTP3` and `QPACK` targets. The QUIC listener runs next to the TCP listeners in the same
@@ -73,7 +73,7 @@ The full config reference is in [Running on a Mac](running-on-a-mac.md#tls-http2
 `http3` is a restart-only key: `SIGHUP` reports a change to it and ignores it.
 
 What else the executable sets (`makeListeners` in
-[ServerMain.swift](../../Sources/SwiftWebServer/ServerMain.swift)):
+[ServerMain.swift](../../Sources/Photon/ServerMain.swift)):
 
 - Listeners bind in order cleartext, TLS, QUIC, and print `listening HOST:PORT (h3)`.
 - The QUIC listener offers ALPN `h3` and uses the default `QUICConfiguration`.
@@ -367,8 +367,8 @@ The system curl (`/usr/bin/curl`) has no HTTP/3. Homebrew's does (ngtcp2 and ngh
 
 ```bash
 scripts/make-test-identity.sh             # .test-identity/server.p12, self-signed, memory-only use
-swift build -j 2 --product SwiftWebServer
-scripts/guarded.sh -t 120 -- .build/debug/SwiftWebServer --config Root/http-config.tls.json
+swift build -j 2 --product photon
+scripts/guarded.sh -t 120 -- .build/debug/photon --config Root/http-config.tls.json
 ```
 
 In another terminal (`Root/http-config.tls.json` uses TCP and UDP 8443):

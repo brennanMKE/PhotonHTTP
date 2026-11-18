@@ -2,7 +2,7 @@ import Foundation
 import HTTPTestSupport
 import Testing
 
-/// End to end through the shipped `SwiftWebServer` binary (#0124): static files from
+/// End to end through the shipped `photon` binary (#0124): static files from
 /// `Root/Public` at `/`, and `/api` proxied to the `Examples/go-api` app. Both children bind
 /// 127.0.0.1 only and are SIGKILLed on every path (`ChildProcess`). Skips without Go.
 @Suite struct GoProxyIntegrationTests {

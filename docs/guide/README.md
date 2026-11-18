@@ -1,6 +1,6 @@
-# SwiftWebServer guide
+# PhotonHTTP guide
 
-How SwiftWebServer is put together, how to pick the parts you need, how to run it on a Mac
+How PhotonHTTP is put together, how to pick the parts you need, how to run it on a Mac
 for static and dynamic websites, and how each protocol (HTTP/1.1, HTTP/3, WebSockets, TLS) works.
 
 | Guide | Read it for |
@@ -19,8 +19,8 @@ for static and dynamic websites, and how each protocol (HTTP/1.1, HTTP/3, WebSoc
 Quick start, from the repository root:
 
 ```bash
-swift build -c release -j 2 --product SwiftWebServer
-.build/release/SwiftWebServer --config Root/http-config.json   # serves Root/Public
+swift build -c release -j 2 --product photon
+.build/release/photon --config Root/http-config.json   # serves Root/Public
 curl http://127.0.0.1:8080/
 ```
 

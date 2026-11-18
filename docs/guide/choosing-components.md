@@ -6,7 +6,7 @@ There are two ways to choose what goes into a server:
    but only the ones your `http-config.json` enables are registered in the request path. A
    disabled component costs nothing per request. HTTP/2 and HTTP/3 can also be compiled out
    with package traits.
-2. **Build your own server** as a Swift package that depends on SwiftWebServer's library
+2. **Build your own server** as a Swift package that depends on PhotonHTTP's library
    products and composes exactly the components it needs, plus your own handlers.
 
 ## Targets and products
@@ -37,7 +37,7 @@ column (transitively).
 | `ConfigFile` | HTTPCore, HTTP1, HTTPServer, StaticFiles, Compression, VirtualHosts, Auth, Proxy, AccessLog | `ConfigFile.load`, `ServerSettings`, `makeHandler()`: the `http-config.json` schema | You want the JSON config in your own binary |
 | `HTTPTestSupport` | HTTPCore, HTTP1 | In-memory transports and a reference parser for tests | Your tests |
 
-Executables: `SwiftWebServer` (the shipped server: ConfigFile, HTTP1, HTTPServer,
+Executables: `photon` (the shipped server: ConfigFile, HTTP1, HTTPServer,
 NetworkTransport, plus HTTP2 and HTTP3 by trait) and `sws-bench` (benchmarks, `serve` test
 server, `hash-password`).
 
@@ -46,7 +46,7 @@ product of its own.
 
 ## Package traits for the executable
 
-The `SwiftWebServer` executable links HTTP/2 and HTTP/3 through package traits, both on by
+The `photon` executable links HTTP/2 and HTTP/3 through package traits, both on by
 default. There is no `WebSockets` trait: the executable has no in-process WebSocket endpoints
 (those need Swift code, `WebSocketUpgrade`, so they belong in a custom server), and WebSocket
 *proxying* (`"websocket": true` on a mount) is part of `Proxy` and always available.
@@ -57,8 +57,8 @@ default. There is no `WebSockets` trait: the executable has no in-process WebSoc
 | `HTTP3` | QPACK and HTTP3 are not linked; an `http3` key fails at startup with "this build has no HTTP/3" |
 
 ```bash
-swift build -c release -j 2 --product SwiftWebServer --disable-default-traits   # HTTP/1.1 only
-swift build -c release -j 2 --product SwiftWebServer --traits HTTP2              # h1 + h2, no h3
+swift build -c release -j 2 --product photon --disable-default-traits   # HTTP/1.1 only
+swift build -c release -j 2 --product photon --traits HTTP2              # h1 + h2, no h3
 ```
 
 Everything else in the executable is chosen at run time by the config file.
@@ -77,23 +77,23 @@ let package = Package(
     platforms: [.macOS(.v15)],
     dependencies: [
         // From GitHub:
-        // .package(url: "https://github.com/brennanMKE/SwiftWebServer.git", branch: "main"),
-        .package(name: "SwiftWebServer", path: "../.."),
+        // .package(url: "https://github.com/brennanMKE/PhotonHTTP.git", branch: "main"),
+        .package(name: "PhotonHTTP", path: "../.."),
     ],
     targets: [
         .executableTarget(
             name: "MySite",
             dependencies: [
-                .product(name: "HTTPCore", package: "SwiftWebServer"),
-                .product(name: "HTTP1", package: "SwiftWebServer"),
-                .product(name: "HTTP2", package: "SwiftWebServer"),
-                .product(name: "HTTPServer", package: "SwiftWebServer"),
-                .product(name: "NetworkTransport", package: "SwiftWebServer"),
-                .product(name: "StaticFiles", package: "SwiftWebServer"),
-                .product(name: "Router", package: "SwiftWebServer"),
-                .product(name: "WebSockets", package: "SwiftWebServer"),
-                .product(name: "Compression", package: "SwiftWebServer"),
-                .product(name: "AccessLog", package: "SwiftWebServer"),
+                .product(name: "HTTPCore", package: "PhotonHTTP"),
+                .product(name: "HTTP1", package: "PhotonHTTP"),
+                .product(name: "HTTP2", package: "PhotonHTTP"),
+                .product(name: "HTTPServer", package: "PhotonHTTP"),
+                .product(name: "NetworkTransport", package: "PhotonHTTP"),
+                .product(name: "StaticFiles", package: "PhotonHTTP"),
+                .product(name: "Router", package: "PhotonHTTP"),
+                .product(name: "WebSockets", package: "PhotonHTTP"),
+                .product(name: "Compression", package: "PhotonHTTP"),
+                .product(name: "AccessLog", package: "PhotonHTTP"),
             ]),
     ]
 )
@@ -246,7 +246,7 @@ try await server.run()
 `makeHandler()` returns an opaque `some HTTPHandler`, which is a handler only. Its
 access log sits inside `api` here, so requests answered by `api` are not logged; put `AccessLog`
 in front yourself if you need them. This sketch has only the cleartext listener; the
-executable's `makeListeners` in `Sources/SwiftWebServer/ServerMain.swift` shows how it adds the
+executable's `makeListeners` in `Sources/Photon/ServerMain.swift` shows how it adds the
 TLS and QUIC listeners from `settings.tls` and `settings.http3`.
 
 ### HTTPS, HTTP/2 and HTTP/3 in Swift

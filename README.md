@@ -1,4 +1,4 @@
-# SwiftWebServer
+# PhotonHTTP
 
 A modular HTTP/1.1, HTTP/2 and HTTP/3 web server for the Mac, written in Swift 6 with Swift
 Concurrency and **no package dependencies**. Use it as a ready-made server configured by one
@@ -27,12 +27,12 @@ JSON file, or compose its components into your own Swift server.
 ## Quick start
 
 ```bash
-swift build -c release -j 2 --product SwiftWebServer
-.build/release/SwiftWebServer --config Root/http-config.json     # serves Root/Public
+swift build -c release -j 2 --product photon
+.build/release/photon --config Root/http-config.json     # serves Root/Public
 curl http://127.0.0.1:8080/
 ```
 
-Serve any directory: `.build/release/SwiftWebServer --root ~/Sites/example --port 8080`. The
+Serve any directory: `.build/release/photon --root ~/Sites/example --port 8080`. The
 server binds `127.0.0.1` unless you set `"host": "0.0.0.0"`, and prints `listening HOST:PORT`
 once ready. Ctrl-C (or SIGTERM) drains open connections and exits. SIGHUP reloads
 `http-config.json` without dropping requests and reopens the access log (for rotation); see
@@ -43,7 +43,7 @@ HTTPS, HTTP/2 and HTTP/3 locally:
 
 ```bash
 scripts/make-test-identity.sh                                    # self-signed .test-identity/server.p12
-.build/release/SwiftWebServer --config Root/http-config.tls.json
+.build/release/photon --config Root/http-config.tls.json
 curl -k https://127.0.0.1:8443/                                  # HTTP/2
 /opt/homebrew/opt/curl/bin/curl --http3-only -k https://127.0.0.1:8443/
 ```

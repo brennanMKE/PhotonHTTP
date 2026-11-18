@@ -5,7 +5,7 @@
   <key>Label</key><string>@LABEL_PREFIX@.proxy</string>
   <key>ProgramArguments</key>
   <array>
-    <string>@DIR@/bin/SwiftWebServer</string>
+    <string>@DIR@/bin/photon</string>
     <string>--config</string><string>@DIR@/http-config.json</string>
   </array>
   <key>WorkingDirectory</key><string>@DIR@</string>

@@ -2,7 +2,7 @@ import Foundation
 import HTTPTestSupport
 import Testing
 
-/// #0124 acceptance through the shipped `SwiftWebServer` binary configured like
+/// #0124 acceptance through the shipped `photon` binary configured like
 /// `Root/http-config.proxy.json`: static `Root/Public` at `/`, `/api` proxied to the Go example
 /// over HTTP/1.1, HTTP/2 and HTTP/3 on the TLS listener (the gitignored test identity, loaded
 /// in memory; curl `-k`), a WebSocket through a mount, per-site mounts (`hosts[].proxy`) and

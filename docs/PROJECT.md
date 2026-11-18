@@ -5,7 +5,7 @@
 > "Configuration" section, and the design in [ROADMAP.md](ROADMAP.md). The earlier HTTP/2 plan is
 > [HTTP2.md](HTTP2.md) (also superseded).
 
-## ✅ Project: SwiftWebServer
+## ✅ Project: PhotonHTTP
 
 A lightweight, standalone HTTP/1.1 web server written in **Swift 6** using **Swift Concurrency** and **Network.framework**, compatible with macOS and Linux.
 

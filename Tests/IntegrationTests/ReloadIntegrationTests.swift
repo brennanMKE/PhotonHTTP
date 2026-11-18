@@ -4,7 +4,7 @@ import HTTPTestSupport
 import NetworkTransport
 import Testing
 
-/// #0127 acceptance through the shipped `SwiftWebServer` binary: SIGHUP reopens the access log
+/// #0127 acceptance through the shipped `photon` binary: SIGHUP reopens the access log
 /// (a renamed log is followed by a new file at the path), reloads `http-config.json` (a new
 /// proxy mount takes effect while a slow download in flight completes), and keeps the running
 /// configuration when the new file is invalid. These configs turn the file watcher (#0142) off,
@@ -118,7 +118,7 @@ import Testing
         """.utf8).write(to: config)
         server.signal(SIGHUP)
         try await waitForStderr(server, "reload rejected, keeping the running configuration")
-        #expect(server.stderr.contains("host changed and needs a restart; run `SwiftWebServer restart`"), "\(server.stderr)")
+        #expect(server.stderr.contains("host changed and needs a restart; run `photon restart`"), "\(server.stderr)")
         #expect(try await curl(["-o", "/dev/null", "-w", "%{http_code}", "\(base)/api/data.txt"]) == "404")
 
         try Data("""

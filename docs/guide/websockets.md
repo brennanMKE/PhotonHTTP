@@ -14,10 +14,10 @@ in-depth one.
 | You want | Use |
 |---|---|
 | A WebSocket endpoint whose logic is Swift running in the server | `WebSocketUpgrade` in a [custom server package](choosing-components.md#a-custom-server-package) (this guide) |
-| To put an existing WebSocket app (Node, Go, Python, another server) behind SwiftWebServer | The shipped executable's reverse proxy with `"websocket": true` on a mount ([below](#proxying-websockets-to-a-backend)) |
+| To put an existing WebSocket app (Node, Go, Python, another server) behind PhotonHTTP | The shipped executable's reverse proxy with `"websocket": true` on a mount ([below](#proxying-websockets-to-a-backend)) |
 
 **In-process endpoints need Swift code.** `http-config.json` has no key that defines a
-WebSocket endpoint, and the shipped `SwiftWebServer` executable does not link the `WebSockets`
+WebSocket endpoint, and the shipped `photon` executable does not link the `WebSockets`
 target; the config file can only *proxy* WebSockets to a backend. There is also no
 `WebSockets` package trait: it was removed because there was nothing for it to switch (issue
 #0130, [Choosing components](choosing-components.md#package-traits-for-the-executable)).
@@ -27,15 +27,15 @@ target; the config file can only *proxy* WebSockets to a backend. There is also 
 ```swift
 // Package.swift of your server
 dependencies: [
-    .package(url: "https://github.com/brennanMKE/SwiftWebServer.git", branch: "main"),
+    .package(url: "https://github.com/brennanMKE/PhotonHTTP.git", branch: "main"),
 ],
 targets: [
     .executableTarget(name: "MySite", dependencies: [
-        .product(name: "HTTPCore", package: "SwiftWebServer"),
-        .product(name: "HTTP1", package: "SwiftWebServer"),
-        .product(name: "HTTPServer", package: "SwiftWebServer"),
-        .product(name: "NetworkTransport", package: "SwiftWebServer"),
-        .product(name: "WebSockets", package: "SwiftWebServer"),
+        .product(name: "HTTPCore", package: "PhotonHTTP"),
+        .product(name: "HTTP1", package: "PhotonHTTP"),
+        .product(name: "HTTPServer", package: "PhotonHTTP"),
+        .product(name: "NetworkTransport", package: "PhotonHTTP"),
+        .product(name: "WebSockets", package: "PhotonHTTP"),
         // .product(name: "HTTP2", …), .product(name: "HTTP3", …) for h2 and h3 WebSockets
     ]),
 ]

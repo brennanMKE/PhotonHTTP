@@ -3,12 +3,12 @@
 cd "$(dirname "$0")/.."
 
 # Usage:
-#   ./list-ports-for-pids.sh            # lists ports for all SwiftWebServer processes
+#   ./list-ports-for-pids.sh            # lists ports for all PhotonHTTP processes
 #   ./list-ports-for-pids.sh 1234 5678  # lists ports for given PIDs
 
-# If no arguments are given, use all SwiftWebServer PIDs
+# If no arguments are given, use all PhotonHTTP PIDs
 if [ "$#" -eq 0 ]; then
-  PIDS=$(pgrep SwiftWebServer)
+  PIDS=$(pgrep photon)
 else
   PIDS="$@"
 fi

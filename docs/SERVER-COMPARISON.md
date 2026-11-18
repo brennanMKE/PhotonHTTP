@@ -1,6 +1,6 @@
 # Server comparison
 
-How the new SwiftWebServer stack compares with established HTTP servers on the same hardware. The raw results are in [benchmarks/compare-servers.md](benchmarks/compare-servers.md). Re-run with:
+How the new PhotonHTTP stack compares with established HTTP servers on the same hardware. The raw results are in [benchmarks/compare-servers.md](benchmarks/compare-servers.md). Re-run with:
 
 ```bash
 scripts/guarded.sh -t 2400 -- scripts/bench-compare.sh 10 docs/benchmarks/compare-servers.md
@@ -135,9 +135,9 @@ Raw table and setup in [benchmarks/M17-proxy.md](benchmarks/M17-proxy.md); re-ru
 | Path | c=1 req/s | c=16 req/s | c=64 req/s | p50 / p99 at 64, ms |
 |---|---:|---:|---:|---:|
 | upstream direct | 24,908 | 74,731 | 81,406 | 0.75 / 1.16 |
-| **SwiftWebServer `proxy`** | 11,585 | 31,045 | 33,864 | 1.82 / 2.59 |
+| **PhotonHTTP `proxy`** | 11,585 | 31,045 | 33,864 | 1.82 / 2.59 |
 | Apache `mod_proxy` | 11,134 | 34,498 | 38,496 | 1.60 / 2.13 |
 | nginx `proxy_pass` | **15,033** | **40,707** | 37,066 | 1.74 / 2.16 |
 
-The SwiftWebServer proxy is on a par with Apache one request at a time and 10–20% behind
+The PhotonHTTP proxy is on a par with Apache one request at a time and 10–20% behind
 Apache and nginx under concurrency; the per-read timeout race is the known cost to remove.

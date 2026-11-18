@@ -1,6 +1,6 @@
 # Parallax with a System 1 server on another Mac
 
-This example uses SwiftWebServer as a reverse proxy in front of a **System 1 decision model**. The model is
+This example uses PhotonHTTP as a reverse proxy in front of a **System 1 decision model**. The model is
 [Laya](https://huggingface.co/convaiinnovations/laya), served by laya-go's `laya-server`, which runs Laya on the
 GPU with Metal. It runs on a Mac mini ("gordon"). The game is [Parallax](https://github.com/brennanMKE/Parallax),
 which runs on a MacBook. Its computer players ask gordon for their decisions over [Tailscale](https://tailscale.com).
@@ -9,7 +9,7 @@ which runs on a MacBook. Its computer players ask gordon for their decisions ove
 MacBook                       gordon (Mac mini M2)
 ┌────────────────────────┐    ┌──────────────────────────────────────────────────────┐
 │ browser, Parallax      │    │ tailscale serve: tailnet :80 ─▶ 127.0.0.1:8080 (TCP) │
-│ Bearer <key>           │───▶│ SwiftWebServer 127.0.0.1:8080                        │
+│ Bearer <key>           │───▶│ PhotonHTTP 127.0.0.1:8080                        │
 └────────────────────────┘    │  /                     demo page (StaticFiles)       │
        Tailscale only         │  /metrics              Prometheus counters           │
                               │  /laya/…      ─▶ laya-server   127.0.0.1:8799 (Go)   │
@@ -28,12 +28,12 @@ health of both backends, the route table, and a form that sends a Decisions API 
 `laya-swift serve` runs on gordon, `/decision` answers 502 and the demo page shows it as not running.
 
 **Why `tailscale serve`.** macOS lets a non-root process bind a port below 1024 only on `0.0.0.0`, which would
-also expose the server on the home LAN. So SwiftWebServer listens on loopback, and `tailscale serve --tcp 80`
-forwards the tailnet's port 80 to it as raw TCP. SwiftWebServer still does all the HTTP, proxying, auth and
-logging. It's reachable only from the tailnet (not Funnel). The cost: SwiftWebServer sees every client as
+also expose the server on the home LAN. So PhotonHTTP listens on loopback, and `tailscale serve --tcp 80`
+forwards the tailnet's port 80 to it as raw TCP. PhotonHTTP still does all the HTTP, proxying, auth and
+logging. It's reachable only from the tailnet (not Funnel). The cost: PhotonHTTP sees every client as
 `127.0.0.1`, so the access log and `X-Forwarded-For` don't show the tailnet address.
 
-On gordon, SwiftWebServer handles all of these:
+On gordon, PhotonHTTP handles all of these:
 
 - **Network:** it is the only HTTP server the tailnet reaches (through `tailscale serve` on port 80). It and
   both model servers listen on loopback only.
@@ -56,7 +56,7 @@ System 1 agreed with the oracle on 2002 of 2002 questions (100.0%), 30 ms per de
 
 - **Single request:** a request through the proxy took 131 ms for a new state and 5 ms for a cached one.
 - **Model load:** `laya-server` loaded the model in 11.9 s and logged `engine: metal fp16 weights (Apple M2)`.
-- **Memory:** about 510 MB for `laya-server` and about 9 MB for SwiftWebServer.
+- **Memory:** about 510 MB for `laya-server` and about 9 MB for PhotonHTTP.
 
 ## Set up
 
@@ -78,7 +78,7 @@ Examples/parallax-gordon/deploy.sh --stop   # stop both services
 `deploy.sh` does the following:
 
 1. **Key:** it creates a shared key in `~/.config/parallax-gordon/system1-key` (mode 600), if there isn't one.
-2. **Build:** it builds the release `SwiftWebServer` and `laya-server` for arm64 macOS on the MacBook.
+2. **Build:** it builds the release `photon` and `laya-server` for arm64 macOS on the MacBook.
 3. **Config:** it writes `http-config.json` from `http-config.template.json`, filling in gordon's Tailscale IPv4
    address, the ports and the key's hash.
 4. **Ship:** it copies everything to `~/Services/system1` on gordon:
@@ -87,7 +87,7 @@ Examples/parallax-gordon/deploy.sh --stop   # stop both services
    - `http-config.json`
    - `launchd/`
    - `logs/`
-5. **Start:** it installs and restarts two LaunchAgents, `com.github.swiftwebserver.system1.laya` and `….proxy`.
+5. **Start:** it installs and restarts two LaunchAgents, `com.github.photonhttp.system1.laya` and `….proxy`.
    They start at login and restart if they exit. Nothing needs `sudo`.
 6. **Check:** it waits for `/laya/health`, then checks the status page, health and stats. The first start
    downloads the model (846 MB) into `~/.cache/huggingface` on gordon.
@@ -155,8 +155,8 @@ On gordon, in `~/Services/system1/logs/`:
 
 | File | What's in it |
 |---|---|
-| `access.log` | One combined-format line per request, as SwiftWebServer finished it (proxied, 401 and so on). |
-| `server.log` | SwiftWebServer's own output. |
+| `access.log` | One combined-format line per request, as PhotonHTTP finished it (proxied, 401 and so on). |
+| `server.log` | PhotonHTTP's own output. |
 | `laya.log` | Model download and load, the engine in use, and errors. |
 
 ## Notes
@@ -166,7 +166,7 @@ On gordon, in `~/Services/system1/logs/`:
   with a PKCS#12 identity. Tailscale can issue a certificate with `tailscale cert <machine>.<tailnet>.ts.net`
   when HTTPS is enabled for the tailnet; convert it with `openssl pkcs12 -export`. That also turns on HTTP/2 and
   HTTP/3.
-- **Firewall.** SwiftWebServer listens on loopback, so the macOS application firewall never asks about it.
+- **Firewall.** PhotonHTTP listens on loopback, so the macOS application firewall never asks about it.
 - **`tailscale serve` is persistent.** It survives reboots. To remove it, run
   `tailscale serve --tcp 80 off` on gordon (with the Mac app, the CLI is
   `/Applications/Tailscale.app/Contents/MacOS/Tailscale`).
