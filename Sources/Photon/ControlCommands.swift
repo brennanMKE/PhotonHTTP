@@ -118,7 +118,7 @@ final class StatusRecorder: Sendable {
     }
 }
 
-/// `SwiftWebServer check | reload | status | restart` (#0143). They talk to a running server
+/// `photon check | reload | status | restart` (#0143). They talk to a running server
 /// through signals and its status file only: there is no control socket, so nothing new is
 /// reachable over the network.
 enum ControlCommand: String {
@@ -130,10 +130,10 @@ enum ControlCommand: String {
     case restart
 
     static let usage = """
-        usage: SwiftWebServer check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
-               SwiftWebServer reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
-               SwiftWebServer status  [--config FILE] [--json]
-               SwiftWebServer restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
+        usage: photon check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
+               photon reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
+               photon status  [--config FILE] [--json]
+               photon restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
 
           check    validate the config (it is loaded and built as a reload would, the TLS identity
                    in memory only) and, when a server runs with it, say which keys would change
@@ -159,9 +159,9 @@ enum ControlCommand: String {
     static let restartRequiredStatus: Int32 = 3
 
     /// The command that applies restart-only keys (#0144).
-    static let restartCommand = "SwiftWebServer restart"
+    static let restartCommand = "photon restart"
 
-    /// `port, tls.port changed and need a restart: run `SwiftWebServer restart``
+    /// `port, tls.port changed and need a restart: run `photon restart``
     static func restartMessage(_ keys: [String]) -> String {
         let verb = keys.count == 1 ? "needs" : "need"
         return "\(keys.joined(separator: ", ")) changed and \(verb) a restart; run `\(restartCommand)` to apply them"

@@ -23,11 +23,11 @@ Scripts live in `../scripts/` and can be run from any directory:
 | `bench-compare.sh` | Benchmark the new server against nginx, Apache, Caddy, lighttpd and h2o (loopback only) |
 | `bench-baseline.sh` | Load and large-download memory benchmark of the shipped server against the M0 legacy baseline |
 | `milestone-check.sh` | End-of-milestone debug and release tests plus micro benchmarks |
-| `build.sh` | Release build of the `SwiftWebServer` executable |
+| `build.sh` | Release build of the `photon` executable |
 | `run.sh` | Run the server in debug with `Root/http-config.json` (127.0.0.1:8080); extra arguments are passed on |
 | `bg.sh` | Run the release server in the background with `Root/http-config.json`, logging to `server.log` |
 | `sigint.sh` / `sigterm.sh` | Send SIGINT / SIGTERM to whatever listens on `PORT` (default 8080) |
-| `list-ports.sh` | List ports used by running SwiftWebServer processes |
+| `list-ports.sh` | List ports used by running PhotonHTTP processes |
 | `run-autobahn-*.sh` | Autobahn WebSocket test suite (needs Docker / `wstest`) |
 | `commands.txt` | Handy manual curl checks |
 

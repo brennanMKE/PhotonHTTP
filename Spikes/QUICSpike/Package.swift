@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// Standalone spike package for issue #0071. Not part of the SwiftWebServer product.
+// Standalone spike package for issue #0071. Not part of the PhotonHTTP product.
 import PackageDescription
 
 let package = Package(

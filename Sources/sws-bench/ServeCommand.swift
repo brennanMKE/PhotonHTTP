@@ -11,7 +11,7 @@ import StaticFiles
 import WebSockets
 
 /// `sws-bench serve`: a bench and test harness for the new stack (#0079). The shipped server is
-/// the `SwiftWebServer` executable (#0086); this one adds built-in echo and hello handlers.
+/// the `photon` executable (#0086); this one adds built-in echo and hello handlers.
 ///
 /// Runs a ``Server`` over a `TCPListener` speaking HTTP/1.1 (#0080) with a built-in handler:
 /// a `POST` gets its body echoed back, a `PUT` gets the length of its body (read in bounded

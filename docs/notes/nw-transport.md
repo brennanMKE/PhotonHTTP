@@ -169,7 +169,7 @@ TLS stays on Network.framework even though cleartext defaults to BSD sockets (RO
   that slot forever, so each TLS connection gets a timer on the listener queue
   (`TLSConfiguration.handshakeTimeout`, default 10 s) that `forceCancel`s it if it is still
   preparing.
-- **Failures** are logged (`os.Logger`, subsystem `SwiftWebServer`, category `TLS`), counted
+- **Failures** are logged (`os.Logger`, subsystem `PhotonHTTP`, category `TLS`), counted
   in `failedHandshakeCount`, and dropped; nothing is handed over.
 - **No identity reload.** NW copies the listener's parameters when the listener is created and
   has no public server-side hook to pick an identity per handshake, so a new identity needs a

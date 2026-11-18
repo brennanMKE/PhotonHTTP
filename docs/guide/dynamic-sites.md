@@ -5,7 +5,7 @@ Two ways to serve dynamic content:
 | | In-process Swift | Reverse proxy |
 |---|---|---|
 | What | Your handlers run inside the server: `Router` routes, `WebSocketUpgrade` endpoints, any `HTTPHandler` | The server forwards path prefixes to apps on localhost (Go, Node, Python, Rails, another Swift server…) over HTTP/1.1 or a Unix socket |
-| Build | Your own Swift package composing SwiftWebServer's products | The shipped executable plus a `proxy` key; no Swift code |
+| Build | Your own Swift package composing PhotonHTTP's products | The shipped executable plus a `proxy` key; no Swift code |
 | Cost per request | A function call | Two loopback round trips (about 18 µs added, see [performance](performance.md)) |
 | Good for | APIs and real-time endpoints written in Swift | Existing apps in any language; isolating an app in its own process |
 
@@ -120,7 +120,7 @@ headers):
 
 ```bash
 (cd Examples/go-api && go run . -addr 127.0.0.1:9000) &
-.build/release/SwiftWebServer --config Root/http-config.proxy.json   # needs scripts/make-test-identity.sh (TLS)
+.build/release/photon --config Root/http-config.proxy.json   # needs scripts/make-test-identity.sh (TLS)
 curl http://127.0.0.1:8080/api/health        # {"status":"ok"}
 curl http://127.0.0.1:8080/api/echo          # shows X-Forwarded-For/Proto/Host/Prefix
 curl http://127.0.0.1:8080/                  # Root/Public/index.html
@@ -184,7 +184,7 @@ default (`total` is off by default). Values are capped at one year. For long-pol
 streaming upstreams (server-sent events, long downloads), set `"idle": 0` and `"response": 0`
 (or large values); `idle: 0` also leaves upgraded tunnels without an idle limit.
 
-### Apache `mod_proxy` → SwiftWebServer
+### Apache `mod_proxy` → PhotonHTTP
 
 | Apache | `proxy` mount |
 |---|---|
@@ -237,7 +237,7 @@ another over Tailscale is in
 > port of laya-go, is bootstrapped: it compiles the Metal shaders and loads the fixtures, but its
 > `LayaModel` is a placeholder that cannot answer questions. The sketch below uses the API
 > planned in laya-swift's `docs/swift-port.md` (`LayaModel.load`, `predict`, `LayaState`,
-> `NamedQuestion`), which may change. LayaKit is **not** a dependency of SwiftWebServer; it
+> `NamedQuestion`), which may change. LayaKit is **not** a dependency of PhotonHTTP; it
 > would be a dependency of your own server package.
 
 Design:
@@ -260,7 +260,7 @@ Design:
 ```swift
 import Foundation
 import HTTPCore
-import LayaKit          // your package's dependency, not SwiftWebServer's
+import LayaKit          // your package's dependency, not PhotonHTTP's
 import Router
 import Synchronization
 
@@ -296,7 +296,7 @@ client does not change when the model moves in-process.
 ## Production checklist
 
 - **Upstreams on loopback or Unix sockets only.** Bind apps to `127.0.0.1` (or a socket) so
-  the only way in is through SwiftWebServer, its auth and its logs.
+  the only way in is through PhotonHTTP, its auth and its logs.
 - **Pool sizing.** Set `pool.maxIdle` to the concurrency you expect per upstream (the M17
   benchmark ran out of loopback ports with the default 16 at 64 concurrent clients before
   `maxIdle` was raised), and `pool.maxConnections` to what the app can handle.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy a System 1 decision server to another Mac on your tailnet:
-# SwiftWebServer listens on the Mac's Tailscale address and reverse-proxies
+# PhotonHTTP listens on the Mac's Tailscale address and reverse-proxies
 # /laya to laya-server (Laya on the GPU via Metal) on that Mac's loopback.
 #
 #   Examples/parallax-gordon/deploy.sh            # build, ship, (re)start, check
@@ -10,11 +10,11 @@
 # Settings (environment):
 #   SYSTEM1_SSH        ssh destination of the server Mac   (default: gordon)
 #   SYSTEM1_DIR        install folder on that Mac          (default: ~/Services/system1)
-#   SYSTEM1_PORT       loopback port SwiftWebServer listens on (default: 8080)
+#   SYSTEM1_PORT       loopback port PhotonHTTP listens on (default: 8080)
 #   SYSTEM1_PUBLIC_PORT  tailnet port Tailscale forwards to it (default: 80)
 #   SYSTEM1_DECISION_PORT  loopback port of the laya-swift decisions server (default: 8790)
 #   SYSTEM1_LAYA_PORT  laya-server's loopback port there   (default: 8799)
-#   SYSTEM1_BIND       address SwiftWebServer binds (default: 127.0.0.1). macOS lets
+#   SYSTEM1_BIND       address PhotonHTTP binds (default: 127.0.0.1). macOS lets
 #                      a non-root process bind a port below 1024 only on 0.0.0.0, so
 #                      `tailscale serve --tcp` forwards the tailnet's port 80 to it
 #   LAYA_GO            laya-go checkout to build laya-server from
@@ -39,7 +39,7 @@ DECISION_PORT="${SYSTEM1_DECISION_PORT:-8790}"
 LAYA_GO="${LAYA_GO:-$REPO/../laya-go}"
 LAYA_SWIFT="${LAYA_SWIFT:-$REPO/../laya-swift}"
 KEY_FILE="${SYSTEM1_KEY_FILE:-$HOME/.config/parallax-gordon/system1-key}"
-LABEL_PREFIX="com.github.swiftwebserver.system1"
+LABEL_PREFIX="com.github.photonhttp.system1"
 TAILSCALE_CLI=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 
 remote() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_DEST" "$@"; }
@@ -79,7 +79,7 @@ case "${1:-}" in
   *) echo "usage: $0 [--check|--stop]" >&2; exit 2 ;;
 esac
 
-# The shared key: Parallax sends it as a bearer token, SwiftWebServer checks its hash.
+# The shared key: Parallax sends it as a bearer token, photon checks its hash.
 if [[ ! -s "$KEY_FILE" ]]; then
   mkdir -p "$(dirname "$KEY_FILE")" && chmod 700 "$(dirname "$KEY_FILE")"
   (umask 077 && openssl rand -hex 32 | tr -d '\n' > "$KEY_FILE")
@@ -90,14 +90,14 @@ token_sha="$(printf %s "$(cat "$KEY_FILE")" | shasum -a 256 | cut -d' ' -f1)"
 # Build both binaries here (arm64 macOS), then ship them.
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
-echo "Building SwiftWebServer (release)…"
-(cd "$REPO" && swift build -c release -j 2 --product SwiftWebServer >/dev/null)
+echo "Building PhotonHTTP (release)…"
+(cd "$REPO" && swift build -c release -j 2 --product photon >/dev/null)
 echo "Building laya-server from ${LAYA_GO}…"
 (cd "$LAYA_GO" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$stage/bin/laya-server" ./cmd/laya-server)
 echo "Building laya-swift (release) from ${LAYA_SWIFT}…"
 (cd "$LAYA_SWIFT" && swift build -c release -j 2 --arch arm64 --product laya-swift >/dev/null \
    && cp "$(swift build -c release --arch arm64 --show-bin-path)/laya-swift" "$stage/bin/")
-cp "$REPO/.build/release/SwiftWebServer" "$stage/bin/"
+cp "$REPO/.build/release/photon" "$stage/bin/"
 cp -R "$HERE/Public" "$stage/"
 sed -e "s|@BIND_ADDR@|$bind_addr|" -e "s|@PORT@|$PORT|" -e "s|@LAYA_PORT@|$LAYA_PORT|" -e "s|@DECISION_PORT@|$DECISION_PORT|" \
     -e "s|@TOKEN_SHA256@|$token_sha|" "$HERE/http-config.template.json" > "$stage/http-config.json"

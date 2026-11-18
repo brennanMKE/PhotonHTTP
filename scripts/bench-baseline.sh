@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load benchmark of the shipped SwiftWebServer, compared with the M0 legacy baseline.
+# Load benchmark of the shipped PhotonHTTP, compared with the M0 legacy baseline.
 #
 #   scripts/bench-baseline.sh [output.md]      (default docs/benchmarks/M4-cutover.md)
 #
@@ -9,7 +9,7 @@
 # clients and settings, and adds keep-alive rows and a large-download memory check.
 #
 # Builds release, serves a temporary copy of Root/Public (plus a generated large file) with
-# the release SwiftWebServer on a free loopback port, and measures it with `sws-bench load`
+# the release photon on a free loopback port, and measures it with `sws-bench load`
 # and oha, keep-alive off (as in M0) and on. Then downloads a sparse LARGE_GB GiB file once
 # and samples the server's RSS while it streams. Nothing is written under Root/.
 #
@@ -74,7 +74,7 @@ LOAD_BEFORE="$(sysctl -n vm.loadavg | tr -d '{}' | xargs)"
 wait_for_time_wait_drain
 
 echo "==> swift build -c release"
-swift build -c release -j 2 --product SwiftWebServer 2>&1 | tail -1
+swift build -c release -j 2 --product photon 2>&1 | tail -1
 swift build -c release -j 2 --product sws-bench 2>&1 | tail -1
 BIN=$(swift build -c release --show-bin-path)
 
@@ -89,8 +89,8 @@ cat > "$WORK/http-config.json" <<EOF
 { "host": "127.0.0.1", "port": 0, "root": "Public" }
 EOF
 
-echo "==> SwiftWebServer"
-"$GUARD" -t "$SERVER_BUDGET" -- "$BIN/SwiftWebServer" --config "$WORK/http-config.json" \
+echo "==> PhotonHTTP"
+"$GUARD" -t "$SERVER_BUDGET" -- "$BIN/photon" --config "$WORK/http-config.json" \
     >"$WORK/server.out" 2>"$WORK/server.err" &
 SERVER_GUARD=$!
 for _ in $(seq 1 100); do
@@ -276,7 +276,7 @@ def load_warning():
             f"from other work running in parallel). Numbers are depressed and noisy; re-run "
             f"`scripts/bench-baseline.sh` on an idle machine before using them as a gate.\n")
 
-doc = f"""# M4 cut-over: shipped SwiftWebServer load and memory
+doc = f"""# M4 cut-over: shipped PhotonHTTP load and memory
 
 Recorded by `scripts/bench-baseline.sh` on {env['DATE']} at commit `{env['COMMIT']}`.
 Compared with the M0 legacy baseline ([M0-baseline.md](M0-baseline.md)); the legacy server
@@ -296,7 +296,7 @@ itself was deleted in #0086.
 
 ## Method
 
-- Server: the release `SwiftWebServer` with a config of only `host`, `port: 0` and `root`
+- Server: the release `photon` with a config of only `host`, `port: 0` and `root`
   (every other setting at its default: BSD transport, HTTP/1.1, ErrorPages + StaticFiles,
   `maxConnections` 1024), serving a copy of `Root/Public` plus a {large_mb} MiB random
   `large.bin`, as in M0. One server process for the whole run.

@@ -5,7 +5,7 @@ import NetworkTransport
 import Synchronization
 import Testing
 
-/// #0144 through the shipped binary: `SwiftWebServer restart` (SIGUSR2) applies a
+/// #0144 through the shipped binary: `photon restart` (SIGUSR2) applies a
 /// restart-only key in the same process while clients send requests in a loop over cleartext
 /// and TLS, on new and keep-alive connections. Everything binds 127.0.0.1 (port 0, which a
 /// restart keeps) and lives under `$TMPDIR`; the TLS identity is the gitignored test identity,

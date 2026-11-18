@@ -5,4 +5,4 @@
 
 cd "$(dirname "$0")/.."
 
-exec swift run -c debug SwiftWebServer --config "$PWD/Root/http-config.json" "$@"
+exec swift run -c debug photon --config "$PWD/Root/http-config.json" "$@"

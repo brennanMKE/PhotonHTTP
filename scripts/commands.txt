@@ -31,8 +31,8 @@ scripts/sigterm.sh            # or scripts/sigint.sh; PORT=9000 scripts/sigterm.
 
 # Build and run
 swift build -j 2
-swift run -c debug SwiftWebServer --config Root/http-config.json
-swift run -c release SwiftWebServer --config Root/http-config.json --port 9000
+swift run -c debug photon --config Root/http-config.json
+swift run -c release photon --config Root/http-config.json --port 9000
 swift build --target ConfigFile
 scripts/guarded.sh -t 900 -- swift test -j 2
 scripts/guarded.sh -t 600 -- swift test -j 2 --filter ParityTests

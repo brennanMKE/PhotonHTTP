@@ -1,4 +1,4 @@
-# SwiftWebServer Roadmap: a dependency-free, modular HTTP/1.1 + HTTP/2 + HTTP/3 server
+# PhotonHTTP Roadmap: a dependency-free, modular HTTP/1.1 + HTTP/2 + HTTP/3 server
 
 Swift 6, macOS 15+, Network.framework, zero package dependencies. This document supersedes `docs/HTTP2.md` (its limits table and DoS list remain valid and are carried into the HTTP/2 track).
 
@@ -69,7 +69,7 @@ Sources/
   StaticFiles/       optional (conditional requests, Range)
   Compression/ VirtualHosts/ Auth/ AccessLog/ Router/   optional
   ConfigFile/        JSON config -> components (Foundation; CLI only)
-  SwiftWebServer/    executable
+  PhotonHTTP/    executable
   sws-bench/         benchmark harness
   HTTPTestSupport/   InMemoryTransport, InMemoryMultiplexedTransport, reference parser
 Tests/               one test target per source target, plus IntegrationTests

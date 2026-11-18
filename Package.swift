@@ -62,7 +62,7 @@ func dependencies(_ names: [String]) -> [Target.Dependency] {
 
 var products: [Product] = libraries.map { .library(name: $0.name, targets: [$0.name]) }
 products += [
-    .executable(name: "SwiftWebServer", targets: ["SwiftWebServer"]),
+    .executable(name: "photon", targets: ["Photon"]),
     .executable(name: "sws-bench", targets: ["SWSBench"]),
 ]
 
@@ -80,7 +80,7 @@ for library in libraries {
 
 targets += [
     .executableTarget(
-        name: "SwiftWebServer",
+        name: "Photon",
         dependencies: ["ConfigFile", "HTTPCore", "HTTP1", "HTTPServer", "NetworkTransport",
                        .target(name: "HTTP2", condition: .when(traits: ["HTTP2"])), .target(name: "HTTP3", condition: .when(traits: ["HTTP3"]))],
         swiftSettings: modernSwiftSettings),
@@ -100,7 +100,7 @@ targets += [
 ]
 
 let package = Package(
-    name: "SwiftWebServer",
+    name: "PhotonHTTP",
     platforms: [.macOS(.v15)],
     products: products,
     traits: [

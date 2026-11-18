@@ -1,5 +1,5 @@
 // Command go-api is a minimal REST API used as the upstream app for the
-// SwiftWebServer reverse proxy (milestone M17). It uses only the Go standard
+// PhotonHTTP reverse proxy (milestone M17). It uses only the Go standard
 // library and keeps its data in memory.
 //
 // The proxy mounts it at /api, so it serves the full /api/... paths itself

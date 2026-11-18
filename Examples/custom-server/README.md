@@ -1,6 +1,6 @@
 # custom-server: compose only the components you need
 
-A separate Swift package that depends on SwiftWebServer's library products by path and builds
+A separate Swift package that depends on PhotonHTTP's library products by path and builds
 a server with `StaticFiles`, a `Router` JSON API, a `WebSocketUpgrade` echo, `Compression` and
 `AccessLog`, over HTTP/1.1 on loopback. It registers
 `TLSNegotiated(HTTP2(), fallback: HTTP1())`, so a TLS listener you add offers HTTP/2 by ALPN

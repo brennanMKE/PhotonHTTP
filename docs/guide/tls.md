@@ -1,6 +1,6 @@
 # TLS
 
-How SwiftWebServer does TLS: where the handshake runs, what identity formats it loads, how
+How PhotonHTTP does TLS: where the handshake runs, what identity formats it loads, how
 ALPN picks HTTP/1.1, HTTP/2 or HTTP/3, what you can and cannot tune, how to get and test a
 certificate without touching the keychain, and what the identity errors mean. The config keys
 and the short HTTPS recipe are in [Running on a Mac](running-on-a-mac.md#https-with-a-pkcs12-identity);
@@ -38,7 +38,7 @@ Points that follow from this design:
   after its handshake is done, so the negotiated ALPN token and TLS version are final when the
   protocol is chosen. A connection whose handshake fails (cleartext on the TLS port, an ALPN
   offer the server does not accept, a rejected certificate) is closed, logged under the
-  `SwiftWebServer` subsystem, category `TLS`, and counted in `TCPListener.failedHandshakeCount`.
+  `PhotonHTTP` subsystem, category `TLS`, and counted in `TCPListener.failedHandshakeCount`.
   It never reaches the handler.
 - **Handshake timeout.** A connection that does not finish the TCP and TLS handshakes within
   `TLSConfiguration.handshakeTimeout` (default 10 s) is reset, so silent clients cannot hold
@@ -231,7 +231,7 @@ Put it early in the chain (before `StaticFiles` and the router). The shipped exe
 key for it; a server built from `ConfigFile` can wrap the built chain. Turn HSTS on only once
 HTTPS works for every name the site serves (and every subdomain, if you add
 `includeSubDomains`): browsers remember it for `max-age` seconds. If the site is reached through a TLS-terminating proxy and
-SwiftWebServer itself speaks cleartext, `isSecure` is false; send the header from the proxy.
+PhotonHTTP itself speaks cleartext, `isSecure` is false; send the header from the proxy.
 
 ## Getting a certificate
 
@@ -315,7 +315,7 @@ accept the certificate per command, never by trusting it system-wide:
 
 ```bash
 scripts/make-test-identity.sh
-.build/release/SwiftWebServer --config Root/http-config.tls.json
+.build/release/photon --config Root/http-config.tls.json
 
 # Verify against the test certificate (OpenSSL treats the self-signed cert as its own anchor;
 # `openssl verify -CAfile .test-identity/cert.pem .test-identity/cert.pem` prints OK)
@@ -437,7 +437,7 @@ The server logs each failed handshake at info level (`handshake with ADDRESS fai
 closing`, or `TLS handshake with ADDRESS timed out; closing`). Watch them with:
 
 ```bash
-log stream --level info --predicate 'subsystem == "SwiftWebServer" AND category == "TLS"'
+log stream --level info --predicate 'subsystem == "PhotonHTTP" AND category == "TLS"'
 ```
 
 | Symptom | Likely cause |

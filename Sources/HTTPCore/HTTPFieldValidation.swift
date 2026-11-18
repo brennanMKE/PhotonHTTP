@@ -131,7 +131,7 @@ public enum HTTPFieldValidation {
 
 extension HTTPFieldValidation {
     /// Reports a handler response that was replaced with `500` because of `error`: an `os`
-    /// log entry at the error level (subsystem `SwiftWebServer`, category `HTTP`). Cold path.
+    /// log entry at the error level (subsystem `PhotonHTTP`, category `HTTP`). Cold path.
     @inline(never)
     public static func reportRejectedResponse(_ error: HTTPFieldValidationError, status: HTTPStatus,
                                               protocolName: StaticString) {
@@ -148,6 +148,6 @@ extension HTTPFieldValidation {
     }
 
     #if canImport(os)
-    static let rejectionLog = Logger(subsystem: "SwiftWebServer", category: "HTTP")
+    static let rejectionLog = Logger(subsystem: "PhotonHTTP", category: "HTTP")
     #endif
 }

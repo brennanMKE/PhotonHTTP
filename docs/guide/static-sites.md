@@ -3,7 +3,7 @@
 A static site needs only the executable and a directory:
 
 ```bash
-.build/release/SwiftWebServer --root ~/Sites/example --port 8080
+.build/release/photon --root ~/Sites/example --port 8080
 ```
 
 or a config file next to the site:

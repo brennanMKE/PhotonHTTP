@@ -4,7 +4,7 @@ import Testing
 
 /// #0143 through the shipped binary: a reload with restart-only changes is rejected whole, the
 /// status file records it, and `check`, `reload` and `status` report it (exit 3 and
-/// `SwiftWebServer restart` when a restart is needed). The server binds 127.0.0.1 port 0 and
+/// `photon restart` when a restart is needed). The server binds 127.0.0.1 port 0 and
 /// everything lives under `$TMPDIR`; the server is SIGKILLed on every path.
 @Suite struct ControlCommandsTests {
     func command(_ arguments: [String]) async throws -> ChildProcess.Output {
@@ -83,13 +83,13 @@ import Testing
         try write(#""root": "Public", "maxConnections": 7"#)
         output = try await command(["check", "--config", config.path])
         #expect(output.status == 3)
-        #expect(output.stdout.contains("needs a restart: maxConnections changed and needs a restart; run `SwiftWebServer restart`"),
+        #expect(output.stdout.contains("needs a restart: maxConnections changed and needs a restart; run `photon restart`"),
                 "\(output.stdout)")
         #expect(output.stdout.contains("also changed (would reload): root"), "\(output.stdout)")
         let reloadsBefore = status(statusFile)?["reloads"] as? Int
         output = try await command(["reload", "--config", config.path])
         #expect(output.status == 3)
-        #expect(output.stderr.contains("run `SwiftWebServer restart`"), "\(output.stderr)")
+        #expect(output.stderr.contains("run `photon restart`"), "\(output.stderr)")
         #expect(status(statusFile)?["reloads"] as? Int == reloadsBefore, "reload must not signal")
 
         // SIGHUP anyway: the server rejects the whole file, root included.

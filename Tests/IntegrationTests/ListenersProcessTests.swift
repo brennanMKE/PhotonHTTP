@@ -4,7 +4,7 @@ import HTTPTestSupport
 import NetworkTransport
 import Testing
 
-/// The shipped `SwiftWebServer` serving cleartext HTTP/1.1, HTTPS and HTTP/3 from one config
+/// The shipped `PhotonHTTP` serving cleartext HTTP/1.1, HTTPS and HTTP/3 from one config
 /// (#0089, #0103), launched as a child process on 127.0.0.1 with every port 0. The TLS
 /// identity is the gitignored test identity from `scripts/make-test-identity.sh`, which the
 /// server imports in memory only. Clients are the system curl (`-k`) and Homebrew curl for

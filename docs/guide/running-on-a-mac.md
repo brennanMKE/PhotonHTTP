@@ -3,18 +3,18 @@
 ## Build
 
 ```bash
-swift build -c release -j 2 --product SwiftWebServer     # or scripts/build.sh
-.build/release/SwiftWebServer --help
+swift build -c release -j 2 --product photon     # or scripts/build.sh
+.build/release/photon --help
 ```
 
 Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org). The binary has
-no dependencies outside the system, so you can copy `.build/release/SwiftWebServer` anywhere,
+no dependencies outside the system, so you can copy `.build/release/photon` anywhere,
 e.g. `/usr/local/bin` or `~/bin`.
 
 ## Command line
 
 ```
-SwiftWebServer [--config FILE] [--root DIR] [--host HOST] [--port PORT]
+photon [--config FILE] [--root DIR] [--host HOST] [--port PORT]
 ```
 
 | Flag | Meaning |
@@ -27,7 +27,7 @@ SwiftWebServer [--config FILE] [--root DIR] [--host HOST] [--port PORT]
 
 `--flag=value` works too. Output:
 
-- stderr: `SwiftWebServer: serving /abs/root` (or one line per virtual host), config warnings,
+- stderr: `photon: serving /abs/root` (or one line per virtual host), config warnings,
   `signal 15, shutting down`, `stopped`, and errors.
 - stdout: `listening 127.0.0.1:8080` once bound, then `listening 127.0.0.1:8443 (https)` and
   `listening 127.0.0.1:8443 (h3)` for the other listeners. Scripts can wait for the first line.
@@ -44,15 +44,15 @@ through its status file (`statusFile`, default `run/status.json` next to the con
 signals its pid; there is no control socket, so nothing new is reachable over the network.
 
 ```
-SwiftWebServer check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
-SwiftWebServer reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
-SwiftWebServer status  [--config FILE] [--json]
-SwiftWebServer restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
+photon check   [--config FILE] [--root DIR] [--host HOST] [--port PORT]
+photon reload  [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
+photon status  [--config FILE] [--json]
+photon restart [--config FILE] [--root DIR] [--host HOST] [--port PORT] [--timeout SECONDS]
 ```
 
 | Command | What it does |
 |---|---|
-| `check` | Loads and builds the config as a reload would (root, error pages, credential files, the TLS identity in memory only) and prints `PATH: valid` or `PATH: invalid: …`. When a server runs with this config, it also prints which keys would change: `can hot-reload: root changed`, `no setting changes` (a reload still rereads the identity and credential files), or `needs a restart: port changed and needs a restart; run `SwiftWebServer restart` to apply them` |
+| `check` | Loads and builds the config as a reload would (root, error pages, credential files, the TLS identity in memory only) and prints `PATH: valid` or `PATH: invalid: …`. When a server runs with this config, it also prints which keys would change: `can hot-reload: root changed`, `no setting changes` (a reload still rereads the identity and credential files), or `needs a restart: port changed and needs a restart; run `photon restart` to apply them` |
 | `reload` | Runs `check`; when the config is valid and needs no restart, sends SIGHUP and waits (up to `--timeout`, default 10 s) for the server to record the outcome, then prints `reloaded: …`, `reload failed, …` or `reload rejected, …`. It does not signal when the config is invalid or needs a restart |
 | `status` | Prints the status file: state and pid, listening addresses, config path and SHA-256, the last reload (time, `signal` or `watch`, result, message), the reload count and any restart-required keys. `--json` prints the file itself |
 | `restart` | Runs `check`; when the config is valid (whether or not it needs a restart), sends SIGUSR2 and waits (up to `--timeout`, default 10 s) for the outcome: `restarted (changed: port); listening …` or `restart failed, the running server keeps serving: …`. The [graceful restart](#graceful-restart) happens in the same process, so launchd sees one pid. It does not signal when the config is invalid |
@@ -197,7 +197,7 @@ so nothing prompts and nothing is installed.
 
 ```bash
 scripts/make-test-identity.sh            # .test-identity/server.p12, self-signed for localhost
-.build/release/SwiftWebServer --config Root/http-config.tls.json
+.build/release/photon --config Root/http-config.tls.json
 curl -k https://127.0.0.1:8443/                      # HTTP/2 via ALPN
 curl -k --http1.1 https://127.0.0.1:8443/
 /opt/homebrew/opt/curl/bin/curl --http3-only -k https://127.0.0.1:8443/   # Homebrew curl has HTTP/3
@@ -215,7 +215,7 @@ StaticFiles serves `/.well-known/` even with `blockDotfiles` on, so you can use 
 with your site's `root`:
 
 ```bash
-# Example with lego, webroot mode, while SwiftWebServer serves the site on port 80
+# Example with lego, webroot mode, while PhotonHTTP serves the site on port 80
 lego --email you@example.com --domains example.com --domains www.example.com \
      --http --http.webroot /Users/me/Sites/example run
 # certificates land in ./.lego/certificates/example.com.crt (full chain) and .key
@@ -242,7 +242,7 @@ After a renewal, write the new `.p12` over the old path (make it in a temporary 
 rereads the identity, and new HTTPS and HTTP/3 connections get the new certificate without a
 restart or dropped connections (see [reload](#shutdown-restart-and-reload)). With the file
 watcher on (the default, `reload.watch`), the signal is optional: the server sees the new file
-within `reload.interval` and reloads by itself. ACME clients have a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"`.
+within `reload.interval` and reloads by itself. ACME clients have a renew hook for that, e.g. `kill -HUP "$(pgrep -f 'photon --config /path/to/http-config.json')"`.
 stderr confirms it with `reload: TLS identity PATH reloaded`; if the new file does not load
 (wrong password, not PKCS#12) it prints `warning: reload: cannot load TLS identity …; keeping
 the current TLS certificate` and keeps serving the old one.
@@ -254,16 +254,16 @@ internet, set `"host": "0.0.0.0"` (all IPv4 interfaces) or `"::"`.
 
 With the macOS application firewall on (System Settings → Network → Firewall), the first time
 an **unsigned or newly built** binary listens on a non-loopback address macOS asks "Do you want
-the application "SwiftWebServer" to accept incoming network connections?". Each rebuild changes
+the application "photon" to accept incoming network connections?". Each rebuild changes
 the binary, so the prompt can come back. Options:
 
 - Click Allow once per build (fine on a desktop; it blocks an unattended start under launchd
   until someone clicks).
-- Install one stable copy (e.g. `/usr/local/bin/SwiftWebServer`), and allow it once; sign it
+- Install one stable copy (e.g. `/usr/local/bin/photon`), and allow it once; sign it
   with your own Developer ID (`codesign -s "Developer ID Application: …"`) so the approval
   survives updates.
 - Allow it ahead of time from an admin shell:
-  `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/SwiftWebServer`
+  `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/photon`
   and `--unblockapp` the same path.
 
 Loopback (`127.0.0.1`, `::1`) never prompts, which is why every example and test here binds
@@ -282,7 +282,7 @@ as a normal user. Binding a *specific* address below 1024 can still fail with `E
 ## Running as a LaunchAgent
 
 A user LaunchAgent starts the server at login and restarts it if it exits. Save as
-`~/Library/LaunchAgents/com.example.swiftwebserver.plist` (adjust paths):
+`~/Library/LaunchAgents/com.example.photonhttp.plist` (adjust paths):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -290,10 +290,10 @@ A user LaunchAgent starts the server at login and restarts it if it exits. Save 
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.example.swiftwebserver</string>
+  <string>com.example.photonhttp</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/SwiftWebServer</string>
+    <string>/usr/local/bin/photon</string>
     <string>--config</string>
     <string>/Users/me/Sites/example/http-config.json</string>
   </array>
@@ -314,23 +314,23 @@ A user LaunchAgent starts the server at login and restarts it if it exits. Save 
   <key>ExitTimeOut</key>
   <integer>30</integer>
   <key>StandardOutPath</key>
-  <string>/Users/me/Library/Logs/SwiftWebServer/stdout.log</string>
+  <string>/Users/me/Library/Logs/PhotonHTTP/stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/me/Library/Logs/SwiftWebServer/stderr.log</string>
+  <string>/Users/me/Library/Logs/PhotonHTTP/stderr.log</string>
 </dict>
 </plist>
 ```
 
 ```bash
-mkdir -p ~/Library/Logs/SwiftWebServer
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.swiftwebserver.plist
-SwiftWebServer restart --config /Users/me/Sites/example/http-config.json   # apply a config, no gap
-launchctl kickstart -k gui/$(id -u)/com.example.swiftwebserver    # new process (a new binary)
-launchctl bootout gui/$(id -u)/com.example.swiftwebserver         # stop and unload
+mkdir -p ~/Library/Logs/PhotonHTTP
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.photonhttp.plist
+photon restart --config /Users/me/Sites/example/http-config.json   # apply a config, no gap
+launchctl kickstart -k gui/$(id -u)/com.example.photonhttp    # new process (a new binary)
+launchctl bootout gui/$(id -u)/com.example.photonhttp         # stop and unload
 ```
 
 - **A config change** that a reload rejects (ports, `tls`, `http2`, `http3`, limits) is applied
-  with `SwiftWebServer restart`: the [graceful restart](#graceful-restart) runs inside the
+  with `photon restart`: the [graceful restart](#graceful-restart) runs inside the
   process launchd started, so the job keeps its pid, nothing is refused, and launchd sees no
   exit.
 - **A new binary** needs a new process: `launchctl kickstart -k` sends SIGTERM (the server
@@ -378,7 +378,7 @@ lines into it).
 
 ```bash
 mv logs/access.log logs/access.log.1
-kill -HUP "$(pgrep -f 'SwiftWebServer --config /path/to/http-config.json')"
+kill -HUP "$(pgrep -f 'photon --config /path/to/http-config.json')"
 ```
 
 `newsyslog` signals a process through a pid file, which the server does not write; run the two
@@ -387,7 +387,7 @@ wrapper write a pid file).
 
 ## Shutdown, restart and reload
 
-- **SIGUSR2** starts a [graceful restart](#graceful-restart) (what `SwiftWebServer restart`
+- **SIGUSR2** starts a [graceful restart](#graceful-restart) (what `photon restart`
   sends).
 - **SIGINT and SIGTERM** start a graceful shutdown: listeners stop accepting, HTTP/2 and HTTP/3
   connections get `GOAWAY`, proxied WebSocket tunnels are closed at the TCP level (clients see
@@ -426,17 +426,17 @@ wrapper write a pid file).
   **A restart-only change rejects the whole reload** (#0143): none of the file applies, not
   even its reloadable keys, so the running state always matches one whole config file. stderr
   says `reload rejected, keeping the running configuration: port changed and needs a restart;
-  run `SwiftWebServer restart` to apply them`, and the status file records the keys in
+  run `photon restart` to apply them`, and the status file records the keys in
   `restartRequired` until a reload succeeds. Every later reload is rejected the same way until
-  the file is put back or the server restarts. `SwiftWebServer check` tells you before you
+  the file is put back or the server restarts. `photon check` tells you before you
   save or signal. Access log metrics start from zero after a reload (the new chain has its own
-  counters). To apply restart-only keys, run `SwiftWebServer restart` (below).
+  counters). To apply restart-only keys, run `photon restart` (below).
 - Static file *contents* need no restart: cached entries are re-checked with `stat` at most
   once per second.
 
 ### Graceful restart
 
-`SwiftWebServer restart` (or SIGUSR2 to the server's pid) applies a whole config file,
+`photon restart` (or SIGUSR2 to the server's pid) applies a whole config file,
 restart-only keys included, inside the running process (#0144):
 
 1. The server reads, validates and builds the config as at startup (same file and
@@ -468,7 +468,7 @@ restart-only keys included, inside the running process (#0144):
    `maxConnections`.
 
 If a new listener cannot bind (its port is taken, a bad `host`), the listeners already bound
-for the restart close and **the old ones keep serving**: stderr and `SwiftWebServer restart`
+for the restart close and **the old ones keep serving**: stderr and `photon restart`
 say `restart failed, the running server keeps serving: listener http on 127.0.0.1:8081:
 Address already in use (errno 48)`, and the status file records `"result": "failed"` with
 `"trigger": "restart"`. Success prints `restarted; listening …` on stderr (not stdout: the

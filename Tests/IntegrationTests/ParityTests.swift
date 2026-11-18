@@ -5,7 +5,7 @@ import NetworkTransport
 import Synchronization
 import Testing
 
-/// Parity with the legacy server (#0086): the shipped `SwiftWebServer` binary, launched as a
+/// Parity with the legacy server (#0086): the shipped `photon` binary, launched as a
 /// child process on 127.0.0.1 port 0, passes the repro steps of legacy issues #0003–#0025
 /// and keeps every legacy behaviour still worth having (GET, HEAD, index files, MIME types,
 /// ETag and 304, 405 with Allow, blocked paths, traversal, signals, config errors).
@@ -61,20 +61,20 @@ import Testing
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    /// The `SwiftWebServer` executable next to the test bundle, or in `.build/debug`.
+    /// The `photon` executable next to the test bundle, or in `.build/debug`.
     static func binary() throws -> URL {
         var candidates: [URL] = []
         for bundle in Bundle.allBundles where bundle.bundleURL.pathExtension == "xctest" {
-            candidates.append(bundle.bundleURL.deletingLastPathComponent().appending(path: "SwiftWebServer"))
+            candidates.append(bundle.bundleURL.deletingLastPathComponent().appending(path: "photon"))
         }
-        candidates.append(packageRoot.appending(path: ".build/debug/SwiftWebServer"))
+        candidates.append(packageRoot.appending(path: ".build/debug/photon"))
         guard let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             throw ChildProcess.Failure.executableNotFound(candidates.map(\.path))
         }
         return found
     }
 
-    /// Starts `SwiftWebServer` with `arguments`; `environment` entries are set through
+    /// Starts `photon` with `arguments`; `environment` entries are set through
     /// `/usr/bin/env`, which execs the server (so the child's pid is the server's).
     static func launch(_ arguments: [String], environment: [String: String] = [:]) throws -> ChildProcess {
         let server = try binary()

@@ -2,7 +2,7 @@ import CommonCrypto
 public import Foundation
 
 /// The running server's status file (#0143): written by the server at startup, after every
-/// reload and restart (#0144) and at exit, read by `SwiftWebServer check`, `reload` and `status`. There is no
+/// reload and restart (#0144) and at exit, read by `photon check`, `reload` and `status`. There is no
 /// control socket: the CLI signals the pid and reads this file.
 ///
 /// Written atomically (a temporary file renamed into place) with mode 0600. It holds no

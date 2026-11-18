@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reverse-proxy overhead (#0124): keep-alive hello-world throughput and latency through
-# SwiftWebServer's `proxy`, Apache mod_proxy and nginx proxy_pass, against the same upstream,
+# PhotonHTTP's `proxy`, Apache mod_proxy and nginx proxy_pass, against the same upstream,
 # compared with hitting the upstream directly.
 #
 #   scripts/bench-proxy.sh [duration_seconds] [concurrency levels...]
@@ -49,7 +49,7 @@ drain() { for _ in $(seq 1 40); do [ "$(time_wait)" -lt 2000 ] && return; sleep 
 mkdir -p "$WORK/logs" "$WORK/root" "$WORK/nginx-tmp"
 
 swift build -c release -j 2 --product sws-bench > /dev/null 2>&1 || { echo "sws-bench build failed"; exit 1; }
-swift build -c release -j 2 --product SwiftWebServer > /dev/null 2>&1 || { echo "SwiftWebServer build failed"; exit 1; }
+swift build -c release -j 2 --product photon > /dev/null 2>&1 || { echo "PhotonHTTP build failed"; exit 1; }
 BIN="$(swift build -c release --show-bin-path)"
 
 # --- upstream: sws-bench serve (hello) ---
@@ -57,7 +57,7 @@ UP=$(free_port)
 "$BIN/sws-bench" serve --host 127.0.0.1 --port "$UP" > "$WORK/logs/upstream.log" 2>&1 &
 PIDS+=($!)
 
-# --- SwiftWebServer proxy ---
+# --- PhotonHTTP proxy ---
 SWS=$(free_port)
 cat > "$WORK/sws.json" <<EOF
 {
@@ -68,7 +68,7 @@ cat > "$WORK/sws.json" <<EOF
               "pool": { "maxIdle": 512 } }]
 }
 EOF
-"$BIN/SwiftWebServer" --config "$WORK/sws.json" > "$WORK/logs/sws.log" 2>&1 &
+"$BIN/photon" --config "$WORK/sws.json" > "$WORK/logs/sws.log" 2>&1 &
 PIDS+=($!)
 
 # --- nginx proxy_pass with an upstream keepalive pool ---

@@ -24,10 +24,10 @@ import NetworkTransport
 /// a message on stderr, 2 on a usage error.
 @main
 enum ServerMain {
-    static let name = "SwiftWebServer"
+    static let name = "photon"
 
     static let usage = """
-        usage: SwiftWebServer [--config FILE] [--root DIR] [--host HOST] [--port PORT]
+        usage: photon [--config FILE] [--root DIR] [--host HOST] [--port PORT]
 
           --config FILE   JSON config (see README "Configuration"); every key is optional.
                           Default: $ROOT_PATH/http-config.json when ROOT_PATH is set, else
@@ -48,10 +48,10 @@ enum ServerMain {
         new listeners on the same ports start accepting, then the old ones drain. The server
         writes its status to run/status.json next to the config ("statusFile").
 
-               SwiftWebServer check | reload | status | restart [--config FILE] ...
+               photon check | reload | status | restart [--config FILE] ...
 
         check a config, reload or restart the running server, show its status (see
-        `SwiftWebServer check --help`).
+        `photon check --help`).
         """
 
     static func main() async {
@@ -240,7 +240,7 @@ enum ServerMain {
     ///
     /// A configuration that changes listener, protocol or connection-limit keys is rejected
     /// whole (#0143): nothing of it applies, the running configuration stays, and stderr and
-    /// the status file name the keys and say to run `SwiftWebServer restart`. A configuration
+    /// the status file name the keys and say to run `photon restart`. A configuration
     /// that does not load, validate or build is reported and the running one stays.
     ///
     /// The TLS identity file is reread too (#0140), even when `tls` is unchanged, since a

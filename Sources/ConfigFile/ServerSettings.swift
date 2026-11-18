@@ -145,7 +145,7 @@ public struct ServerSettings: Sendable, Equatable {
     /// reload on `SIGHUP` only.
     public var reload = ReloadSettings()
 
-    /// The status file the server writes for `SwiftWebServer check`, `reload` and `status`
+    /// The status file the server writes for `photon check`, `reload` and `status`
     /// (#0143), relative to ``baseDirectory``. Default `run/status.json`; written only when
     /// the settings come from a config file. `false` or `null` in the file turns it off.
     public var statusFile: String? = "run/status.json"

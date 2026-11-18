@@ -2,9 +2,9 @@ import Foundation
 import HTTPTestSupport
 import Testing
 
-/// The shipped `SwiftWebServer` binary writes an access log configured in `http-config.json`
+/// The shipped `photon` binary writes an access log configured in `http-config.json`
 /// (#0125): one line per request for static files, a proxied path (the upstream is a second
-/// `SwiftWebServer`) and an auth rejection. Everything binds 127.0.0.1 port 0 and lives under
+/// `PhotonHTTP`) and an auth rejection. Everything binds 127.0.0.1 port 0 and lives under
 /// `$TMPDIR`; both children are SIGKILLed on every path.
 @Suite struct AccessLogConfigIntegrationTests {
     func curl(_ arguments: [String]) async throws -> String {

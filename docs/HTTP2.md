@@ -2,7 +2,7 @@
 
 # HTTP/2 Implementation Plan
 
-This plan takes SwiftWebServer from a one-request-per-connection HTTP/1.1 static file server to a complete HTTP/2 server ([RFC 9113](https://www.rfc-editor.org/rfc/rfc9113) with HPACK, [RFC 7541](https://www.rfc-editor.org/rfc/rfc7541)). HTTP/1.1 stays available as a fallback. Every phase is tracked as issues in `issues/`; see `issues/Issues.md` for the phase-to-issue map.
+This plan takes PhotonHTTP from a one-request-per-connection HTTP/1.1 static file server to a complete HTTP/2 server ([RFC 9113](https://www.rfc-editor.org/rfc/rfc9113) with HPACK, [RFC 7541](https://www.rfc-editor.org/rfc/rfc7541)). HTTP/1.1 stays available as a fallback. Every phase is tracked as issues in `issues/`; see `issues/Issues.md` for the phase-to-issue map.
 
 ## Design principles
 
@@ -254,7 +254,7 @@ Sources/
   HPACK/                   pure Swift, no Foundation
   HTTP2/                   frames, frame sequence, errors, settings, state machine (depends on HPACK)
   SwiftWebServerCore/      transport, HTTP/1.1 codec, connection runners, handlers, config
-  SwiftWebServer/          executable
+  PhotonHTTP/          executable
 Tests/
   HPACKTests/
   HTTP2Tests/

@@ -165,7 +165,7 @@ struct Launch: Sendable {
         return 0
     }
 
-    /// SIGUSR2 or `SwiftWebServer restart` (#0144): reads, validates and builds the whole
+    /// SIGUSR2 or `photon restart` (#0144): reads, validates and builds the whole
     /// configuration (same file and command-line overrides), binds new listeners beside the
     /// running ones (`SO_REUSEPORT` for BSD sockets; Network.framework TLS and QUIC listeners
     /// whose address, identity and ALPN stay the same are handed over), starts accepting on

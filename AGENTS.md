@@ -23,7 +23,7 @@ Run every command that launches a server, a network client, a test suite, or a b
 
 ```bash
 scripts/guarded.sh -t 600 -- swift test
-scripts/guarded.sh -t 120 -- .build/debug/SwiftWebServer
+scripts/guarded.sh -t 120 -- .build/debug/photon
 ```
 
 `scripts/guarded.sh` enforces a wall-clock timeout (exit 124) and watches for new SecurityAgent / CoreServicesUIAgent / UserNotificationCenter processes that appear while the command runs. On detection it kills the command's process group, which dismisses the dialog, and exits 125.
