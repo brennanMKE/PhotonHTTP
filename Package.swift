@@ -100,7 +100,7 @@ targets += [
 ]
 
 let package = Package(
-    name: "SwiftWebServer",
+    name: "PhotonHTTP",
     platforms: [.macOS(.v15)],
     products: products,
     traits: [

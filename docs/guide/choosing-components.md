@@ -77,23 +77,23 @@ let package = Package(
     platforms: [.macOS(.v15)],
     dependencies: [
         // From GitHub:
-        // .package(url: "https://github.com/brennanMKE/SwiftWebServer.git", branch: "main"),
-        .package(name: "SwiftWebServer", path: "../.."),
+        // .package(url: "https://github.com/brennanMKE/PhotonHTTP.git", branch: "main"),
+        .package(name: "PhotonHTTP", path: "../.."),
     ],
     targets: [
         .executableTarget(
             name: "MySite",
             dependencies: [
-                .product(name: "HTTPCore", package: "SwiftWebServer"),
-                .product(name: "HTTP1", package: "SwiftWebServer"),
-                .product(name: "HTTP2", package: "SwiftWebServer"),
-                .product(name: "HTTPServer", package: "SwiftWebServer"),
-                .product(name: "NetworkTransport", package: "SwiftWebServer"),
-                .product(name: "StaticFiles", package: "SwiftWebServer"),
-                .product(name: "Router", package: "SwiftWebServer"),
-                .product(name: "WebSockets", package: "SwiftWebServer"),
-                .product(name: "Compression", package: "SwiftWebServer"),
-                .product(name: "AccessLog", package: "SwiftWebServer"),
+                .product(name: "HTTPCore", package: "PhotonHTTP"),
+                .product(name: "HTTP1", package: "PhotonHTTP"),
+                .product(name: "HTTP2", package: "PhotonHTTP"),
+                .product(name: "HTTPServer", package: "PhotonHTTP"),
+                .product(name: "NetworkTransport", package: "PhotonHTTP"),
+                .product(name: "StaticFiles", package: "PhotonHTTP"),
+                .product(name: "Router", package: "PhotonHTTP"),
+                .product(name: "WebSockets", package: "PhotonHTTP"),
+                .product(name: "Compression", package: "PhotonHTTP"),
+                .product(name: "AccessLog", package: "PhotonHTTP"),
             ]),
     ]
 )

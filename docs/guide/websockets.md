@@ -27,15 +27,15 @@ target; the config file can only *proxy* WebSockets to a backend. There is also 
 ```swift
 // Package.swift of your server
 dependencies: [
-    .package(url: "https://github.com/brennanMKE/SwiftWebServer.git", branch: "main"),
+    .package(url: "https://github.com/brennanMKE/PhotonHTTP.git", branch: "main"),
 ],
 targets: [
     .executableTarget(name: "MySite", dependencies: [
-        .product(name: "HTTPCore", package: "SwiftWebServer"),
-        .product(name: "HTTP1", package: "SwiftWebServer"),
-        .product(name: "HTTPServer", package: "SwiftWebServer"),
-        .product(name: "NetworkTransport", package: "SwiftWebServer"),
-        .product(name: "WebSockets", package: "SwiftWebServer"),
+        .product(name: "HTTPCore", package: "PhotonHTTP"),
+        .product(name: "HTTP1", package: "PhotonHTTP"),
+        .product(name: "HTTPServer", package: "PhotonHTTP"),
+        .product(name: "NetworkTransport", package: "PhotonHTTP"),
+        .product(name: "WebSockets", package: "PhotonHTTP"),
         // .product(name: "HTTP2", …), .product(name: "HTTP3", …) for h2 and h3 WebSockets
     ]),
 ]
