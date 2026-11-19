@@ -1,15 +1,57 @@
 # Running on a Mac
 
-## Build
+## Install
+
+```bash
+curl -fsSL https://photon-http.sstools.co/install.sh | bash
+```
+
+The installer clones the repository, builds a release `photon` with your Swift toolchain and
+installs it to `~/.local/bin/photon`. It never uses `sudo`; if `~/.local/bin` is not on your
+`PATH` it prints the line to add. Options (after `bash -s --`):
+
+| Option | Meaning |
+|---|---|
+| `--prefix DIR` | Install to `DIR/bin` instead of `~/.local/bin` (must be writable) |
+| `--version REF` | Git tag or branch to build (default `main`) |
+
+From a checkout, `scripts/install.sh` builds and installs that checkout. Run the installer
+again to update. Uninstall with `rm ~/.local/bin/photon`.
+
+Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org).
+
+### Build by hand
 
 ```bash
 swift build -c release -j 2 --product photon     # or scripts/build.sh
 .build/release/photon --help
 ```
 
-Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org). The binary has
-no dependencies outside the system, so you can copy `.build/release/photon` anywhere,
-e.g. `/usr/local/bin` or `~/bin`.
+The binary has no dependencies outside the system, so you can copy `.build/release/photon`
+anywhere, e.g. `/usr/local/bin` or `~/bin`.
+
+## Serve a folder
+
+```bash
+cd ~/Sites/my-site
+photon serve                        # http://127.0.0.1:8080/
+photon serve ~/Sites/blog --port 9000
+```
+
+```
+photon serve [DIR] [--port PORT] [--host HOST]
+```
+
+`photon serve` serves `DIR` (default: the current directory) as a static website. A request
+for `/` or any directory serves its `index.html`; a directory requested without the trailing
+slash redirects to it. `--port` defaults to `8080` (`0` picks a free one) and `--host` to
+`127.0.0.1`, so only this Mac can connect; `--host 0.0.0.0` shares the site with your network
+(see [the firewall prompt](#binding-to-all-interfaces-and-the-firewall-prompt)). It prints
+`listening HOST:PORT` once ready; Ctrl-C stops.
+
+`serve` never reads `http-config.json`, so a stray config file cannot change what it does.
+For HTTPS, compression, access logs, error pages or virtual hosts, write a config and run
+`photon --config FILE` (below).
 
 ## Command line
 

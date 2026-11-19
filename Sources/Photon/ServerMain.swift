@@ -48,6 +48,11 @@ enum ServerMain {
         new listeners on the same ports start accepting, then the old ones drain. The server
         writes its status to run/status.json next to the config ("statusFile").
 
+               photon serve [DIR] [--port PORT] [--host HOST]
+
+        serve DIR (default: the current directory) as a static website: "/" and every
+        directory serve their index.html. Ignores http-config.json (see `photon serve --help`).
+
                photon check | reload | status | restart [--config FILE] ...
 
         check a config, reload or restart the running server, show its status (see
@@ -65,6 +70,58 @@ enum ServerMain {
         var host: String?
         var port: UInt16?
         var help = false
+        /// `photon serve`: never read a config file, only the command line.
+        var ignoresConfig = false
+    }
+
+    static let serveUsage = """
+        usage: photon serve [DIR] [--port PORT] [--host HOST]
+
+        Serves DIR (default: the current directory) as a static website. A request for "/" or
+        any directory serves its index.html; other paths map to the files under DIR.
+
+          --port PORT     port to bind (default 8080; 0 picks a free one)
+          --host HOST     numeric address to bind (default 127.0.0.1, this Mac only;
+                          0.0.0.0 shares the site with your network)
+
+        Prints "listening HOST:PORT" once ready. Ctrl-C stops. Any http-config.json is
+        ignored; for HTTPS, compression, access logs or virtual hosts, write a config and run
+        `photon --config FILE`.
+
+        examples:
+          photon serve                    # the current directory on http://127.0.0.1:8080/
+          photon serve ~/Sites/blog --port 9000
+        """
+
+    /// `photon serve [DIR] [--port PORT] [--host HOST]`: static serving of one directory.
+    static func parseServe(_ arguments: [String]) throws(UsageError) -> Options {
+        var flags: [String] = []
+        var directory: String?
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            index += 1
+            if argument == "--help" || argument == "-h" || argument.hasPrefix("--") {
+                if argument.hasPrefix("--config") || argument.hasPrefix("--root") {
+                    throw UsageError(description: "serve takes the directory as an argument and no config file; use `photon \(argument)` instead")
+                }
+                flags.append(argument)
+                if argument.hasPrefix("--"), !argument.contains("="), argument != "--help", index < arguments.count {
+                    flags.append(arguments[index])
+                    index += 1
+                }
+            } else if argument.hasPrefix("-") {
+                throw UsageError(description: "unknown argument '\(argument)'")
+            } else if directory == nil {
+                directory = argument
+            } else {
+                throw UsageError(description: "serve takes one directory, got '\(directory!)' and '\(argument)'")
+            }
+        }
+        var options = try parse(flags)
+        options.root = directory ?? "."
+        options.ignoresConfig = true
+        return options
     }
 
     struct UsageError: Error, CustomStringConvertible {
@@ -111,6 +168,7 @@ enum ServerMain {
     /// `./http-config.json` when it exists, else `nil` (built-in defaults).
     static func configPath(_ options: Options, environment: [String: String]) -> String? {
         if let path = options.config { return path }
+        if options.ignoresConfig { return nil }
         let candidate = ServerSettings.resolve("http-config.json", against: defaultBase(environment))
         return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
     }
@@ -153,15 +211,16 @@ enum ServerMain {
         if let first = arguments.first, let command = ControlCommand(rawValue: first) {
             return await command.run(Array(arguments.dropFirst()), environment: environment)
         }
+        let serving = arguments.first == "serve"
         let options: Options
         do {
-            options = try parse(arguments)
+            options = serving ? try parseServe(Array(arguments.dropFirst())) : try parse(arguments)
         } catch {
-            printError("\(name): \(error)\n\n\(usage)")
+            printError("\(name)\(serving ? " serve" : ""): \(error)\n\n\(serving ? serveUsage : usage)")
             return 2
         }
         if options.help {
-            print(usage)
+            print(serving ? serveUsage : usage)
             return 0
         }
         do {
