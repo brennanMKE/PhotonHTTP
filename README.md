@@ -1,5 +1,7 @@
 # PhotonHTTP
 
+[![PhotonHTTP: a fast, modular web server for the Mac](docs/images/banner.png)](https://photon-http.sstools.co)
+
 A modular HTTP/1.1, HTTP/2 and HTTP/3 web server for the Mac, written in Swift 6 with Swift
 Concurrency and **no package dependencies**. Use it as a ready-made server configured by one
 JSON file, or compose its components into your own Swift server.
