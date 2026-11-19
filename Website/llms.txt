@@ -1,0 +1,39 @@
+# PhotonHTTP
+
+> PhotonHTTP is a fast, modular HTTP/1.1, HTTP/2 and HTTP/3 web server for macOS 15 and later, written in Swift 6 with Swift Concurrency and no package dependencies. Run it as the `photon` command, configured by one JSON file, or compose its components into your own Swift server.
+
+- Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org). Not built or tested on Linux.
+- Install (builds from source, installs `photon` to `~/.local/bin`, no sudo): `curl -fsSL https://photon-http.sstools.co/install.sh | bash` (options `--prefix DIR`, `--version REF`; from a checkout, `scripts/install.sh`).
+- Serve a folder as a static website: `photon serve [DIR] [--port PORT] [--host HOST]` (defaults: current directory, port 8080, host 127.0.0.1; prints `listening 127.0.0.1:8080`).
+- Everything else (TLS, HTTP/2, HTTP/3, compression, logs, virtual hosts, auth, reverse proxy) is configured in `http-config.json` and run with `photon --config http-config.json`.
+- Source code: https://github.com/brennanMKE/PhotonHTTP
+
+## Start here
+
+- [Getting started](https://photon-http.sstools.co/docs/getting-started.md): Install the photon command with one line and serve any folder as a static website with photon serve.
+- [Overview and architecture](https://photon-http.sstools.co/docs/overview.md): Core and optional components, HTTP/1.1, HTTP/2 and HTTP/3, the transports, the concurrency model and the handler chain.
+
+## Run a site
+
+- [Running on a Mac](https://photon-http.sstools.co/docs/running-on-a-mac.md): The photon command line and control commands, the complete http-config.json reference, certificates, public binding, LaunchAgents, logs, reload, restart and shutdown.
+- [Static websites](https://photon-http.sstools.co/docs/static-sites.md): StaticFiles, caching and conditional requests, Range, error pages, compression, virtual hosts and authentication.
+- [Dynamic websites](https://photon-http.sstools.co/docs/dynamic-sites.md): In-process Swift with Router and WebSockets; reverse proxy to local apps; Apache mod_proxy mapping; a production checklist.
+- [TLS](https://photon-http.sstools.co/docs/tls.md): PKCS#12 identities loaded in memory (never the keychain), ALPN and protocol selection, versions and options, getting certificates, testing safely.
+
+## Protocols
+
+- [HTTP/1.1](https://photon-http.sstools.co/docs/http1.md): The request lifecycle, keep-alive and pipelining, bodies and chunked coding, every limit and timeout, error codes and smuggling defences.
+- [HTTP/3](https://photon-http.sstools.co/docs/http3.md): QUIC from Network.framework, Alt-Svc discovery, streams and QPACK, limits and abuse defences, known limitations, testing with curl.
+- [WebSockets](https://photon-http.sstools.co/docs/websockets.md): In-process endpoints, the message API, the handshake over HTTP/1.1, HTTP/2 and HTTP/3, permessage-deflate, limits, close codes and proxying.
+
+## Build your own server
+
+- [Choosing components](https://photon-http.sstools.co/docs/choosing-components.md): Every target and library product, what it depends on and when to include it; building your own server as a Swift package.
+- [Performance notes](https://photon-http.sstools.co/docs/performance.md): Benchmark results against nginx, lighttpd, h2o, Apache and Caddy, per-request costs, and what they mean for configuration.
+
+## Optional
+
+- [Full text of the documentation](https://photon-http.sstools.co/llms-full.txt): every page above in one file
+- [Documentation index](https://photon-http.sstools.co/docs/index.md): the pages above, grouped
+- [README](https://github.com/brennanMKE/PhotonHTTP/blob/main/README.md): the repository's front page
+- [ROADMAP](https://github.com/brennanMKE/PhotonHTTP/blob/main/docs/ROADMAP.md): the design and milestone plan (authoritative)

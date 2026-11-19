@@ -3,10 +3,11 @@
 A static site needs only the executable and a directory:
 
 ```bash
-.build/release/photon --root ~/Sites/example --port 8080
+photon serve ~/Sites/example          # http://127.0.0.1:8080/, index.html for every directory
 ```
 
-or a config file next to the site:
+(see [Serve a folder](running-on-a-mac.md#serve-a-folder)), or a config file next to the site
+for compression, caching, error pages and logs:
 
 ```json
 {

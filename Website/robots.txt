@@ -1,0 +1,6 @@
+# Everything here is public. Search engines and AI agents and crawlers are welcome.
+# For agents: /llms.txt indexes the docs; every docs page has a .md copy.
+User-agent: *
+Allow: /
+
+Sitemap: https://photon-http.sstools.co/sitemap.xml

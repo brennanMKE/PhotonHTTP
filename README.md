@@ -1,5 +1,7 @@
 # PhotonHTTP
 
+[![PhotonHTTP: a fast, modular web server for the Mac](docs/images/banner.png)](https://photon-http.sstools.co)
+
 A modular HTTP/1.1, HTTP/2 and HTTP/3 web server for the Mac, written in Swift 6 with Swift
 Concurrency and **no package dependencies**. Use it as a ready-made server configured by one
 JSON file, or compose its components into your own Swift server.
@@ -26,16 +28,33 @@ JSON file, or compose its components into your own Swift server.
 
 ## Quick start
 
+Install (builds from source into `~/.local/bin`, no `sudo`):
+
+```bash
+curl -fsSL https://photon-http.sstools.co/install.sh | bash     # or scripts/install.sh from a checkout
+```
+
+Serve a folder as a website, with `index.html` for `/` and every directory:
+
+```bash
+cd ~/Sites/my-site
+photon serve                     # http://127.0.0.1:8080/
+photon serve ./public --port 9000
+```
+
+`serve` binds `127.0.0.1` (pass `--host 0.0.0.0` to share it on your network), prints
+`listening HOST:PORT` once ready, and stops on Ctrl-C. Docs: <https://photon-http.sstools.co/docs/>.
+
+For more than plain static files, use a config file:
+
 ```bash
 swift build -c release -j 2 --product photon
 .build/release/photon --config Root/http-config.json     # serves Root/Public
 curl http://127.0.0.1:8080/
 ```
 
-Serve any directory: `.build/release/photon --root ~/Sites/example --port 8080`. The
-server binds `127.0.0.1` unless you set `"host": "0.0.0.0"`, and prints `listening HOST:PORT`
-once ready. Ctrl-C (or SIGTERM) drains open connections and exits. SIGHUP reloads
-`http-config.json` without dropping requests and reopens the access log (for rotation); see
+SIGINT or SIGTERM drains open connections and exits. SIGHUP reloads `http-config.json`
+without dropping requests and reopens the access log (for rotation); see
 [Running on a Mac](docs/guide/running-on-a-mac.md#shutdown-restart-and-reload) for which keys
 need a restart.
 

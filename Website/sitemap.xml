@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://photon-http.sstools.co/</loc><lastmod>2026-11-19</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/</loc><lastmod>2026-11-19</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/getting-started.html</loc><lastmod>2026-11-19</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/overview.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/running-on-a-mac.html</loc><lastmod>2026-11-19</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/static-sites.html</loc><lastmod>2026-11-19</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/dynamic-sites.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/tls.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/http1.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/http3.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/websockets.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/choosing-components.html</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://photon-http.sstools.co/docs/performance.html</loc><lastmod>2026-11-12</lastmod></url>
+</urlset>
