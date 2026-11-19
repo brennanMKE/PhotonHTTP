@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhotonHTTP · a fast, modular web server for the Mac</title>
+<meta name="description" content="PhotonHTTP is a fast, modular HTTP/1.1, HTTP/2 and HTTP/3 web server for macOS 15 and later, written in Swift 6 with no package dependencies.">
+<link rel="canonical" href="https://photon-http.sstools.co/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PhotonHTTP">
+<meta property="og:title" content="PhotonHTTP · a fast, modular web server for the Mac">
+<meta property="og:description" content="HTTP/1.1, HTTP/2 and HTTP/3 for macOS 15+, written in Swift 6 with zero dependencies. Serve a folder with one command.">
+<meta property="og:url" content="https://photon-http.sstools.co/">
+<meta property="og:image" content="https://photon-http.sstools.co/images/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="PhotonHTTP">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PhotonHTTP · a fast, modular web server for the Mac">
+<meta name="twitter:description" content="HTTP/1.1, HTTP/2 and HTTP/3 for macOS 15+, written in Swift 6 with zero dependencies. Serve a folder with one command.">
+<meta name="twitter:image" content="https://photon-http.sstools.co/images/og.png">
+<link rel="alternate" type="text/markdown" href="llms.txt" title="llms.txt">
+<link rel="preload" as="image" href="images/hero.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "PhotonHTTP",
+  "description": "A fast, modular HTTP/1.1, HTTP/2 and HTTP/3 web server for macOS 15 and later, written in Swift 6 with no package dependencies.",
+  "url": "https://photon-http.sstools.co/",
+  "codeRepository": "https://github.com/brennanMKE/PhotonHTTP",
+  "sameAs": "https://github.com/brennanMKE/PhotonHTTP",
+  "downloadUrl": "https://photon-http.sstools.co/install.sh",
+  "installUrl": "https://photon-http.sstools.co/docs/getting-started.html",
+  "image": "https://photon-http.sstools.co/images/og.png",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS 15+",
+  "programmingLanguage": "Swift",
+  "softwareRequirements": "Swift 6.4 toolchain",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./"><img src="images/logo.png" alt="" width="28" height="28" onerror="this.remove()"><span>Photon<b>HTTP</b></span></a>
+    <nav class="top-nav" aria-label="Site">
+      <a href="docs/">Docs</a>
+      <a href="docs/getting-started.html">Get started</a>
+      <a href="https://github.com/brennanMKE/PhotonHTTP" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <span class="eyebrow">HTTP/1.1 · HTTP/2 · HTTP/3 for macOS</span>
+        <h1>A fast, modular web server <em>for the Mac.</em></h1>
+        <p class="lede">PhotonHTTP is written in Swift 6 with Swift Concurrency and no package
+        dependencies. Serve a folder with one command, run a full site from one JSON file, or
+        compose its components into your own Swift server.</p>
+        <div class="cta">
+          <a class="btn primary" href="docs/getting-started.html">Get started</a>
+          <a class="btn" href="docs/">Read the docs</a>
+          <a class="btn" href="https://github.com/brennanMKE/PhotonHTTP" rel="noopener">GitHub</a>
+        </div>
+        <ul class="facts">
+          <li>macOS 15 or later</li>
+          <li>Swift 6, strict concurrency</li>
+          <li>Zero package dependencies</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <section id="quick-start">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Quick start</h2>
+        <p>Install the <code>photon</code> command, then serve any folder as a static website.</p>
+      </div>
+      <div class="quickstart">
+        <div class="step">
+          <h3><span class="n">1</span>Install</h3>
+          <p>Clones the repository, builds a release binary with your Swift toolchain and installs
+          <code>photon</code> to <code>~/.local/bin</code>. No sudo.</p>
+<pre><code><span class="prompt">$ </span>curl -fsSL https://photon-http.sstools.co/install.sh | bash</code></pre>
+          <p class="note">Needs macOS 15+ and a Swift 6.4 toolchain (Xcode or swift.org).
+          Options: <code>--prefix DIR</code>, <code>--version REF</code>.
+          <a href="docs/getting-started.html#install">More</a></p>
+        </div>
+        <div class="step">
+          <h3><span class="n">2</span>Serve a folder</h3>
+          <p>Serves the current directory on <code>http://127.0.0.1:8080/</code>; every directory
+          serves its <code>index.html</code>. Ctrl-C stops it.</p>
+<pre><code><span class="prompt">$ </span>cd ~/Sites/example
+<span class="prompt">$ </span>photon serve
+<span class="out">listening 127.0.0.1:8080
+</span></code></pre>
+          <p class="note">Pick a folder and port with <code>photon serve public --port 8000</code>;
+          share on your network with <code>--host 0.0.0.0</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>What you get</h2>
+        <p>A small core plus optional components. A component that is not configured is not in
+        the request path at all.</p>
+      </div>
+      <div class="features">
+        <div class="feature">
+          <h3>HTTP/1.1, HTTP/2, HTTP/3</h3>
+          <p>Keep-alive, pipelining, chunked bodies and <code>100-continue</code>; HTTP/2 over TLS
+          via ALPN (optional h2c), passing h2spec 146/146; HTTP/3 over QUIC with
+          <code>Alt-Svc</code> discovery. <a href="docs/overview.html#protocols">Protocols</a></p>
+        </div>
+        <div class="feature">
+          <h3>Static files</h3>
+          <p>Index files, MIME types, strong ETags, conditional requests (<code>304</code>/<code>412</code>),
+          single <code>Range</code> (<code>206</code>), <code>sendfile</code> for large files, an in-memory
+          cache for small ones, traversal and dotfile protection. <a href="docs/static-sites.html">Static sites</a></p>
+        </div>
+        <div class="feature">
+          <h3>Compression</h3>
+          <p>Brotli, gzip and deflate. Static files are compressed once, or served from
+          <code>.br</code>/<code>.gz</code> sidecars. <a href="docs/static-sites.html#compression">Compression</a></p>
+        </div>
+        <div class="feature">
+          <h3>Virtual hosts and error pages</h3>
+          <p>Several sites on one listener, with wildcard names; custom per-site or generated
+          error pages. <a href="docs/static-sites.html#virtual-hosts">Virtual hosts</a></p>
+        </div>
+        <div class="feature">
+          <h3>TLS without the keychain</h3>
+          <p>Identities load from a PKCS#12 file in memory only: nothing is installed and nothing
+          prompts. Certificates reload on SIGHUP without dropping connections. <a href="docs/tls.html">TLS</a></p>
+        </div>
+        <div class="feature">
+          <h3>Authentication</h3>
+          <p>HTTP Basic (PBKDF2), HS256 JWT and bearer tokens per path prefix, with failure
+          limiting. <a href="docs/static-sites.html#authentication">Auth</a></p>
+        </div>
+        <div class="feature">
+          <h3>Reverse proxy</h3>
+          <p>Forward paths to local apps over TCP or Unix sockets, with pooling, timeouts,
+          retries, health checks and WebSocket tunnelling. <a href="docs/dynamic-sites.html">Dynamic sites</a></p>
+        </div>
+        <div class="feature">
+          <h3>WebSockets</h3>
+          <p>Over HTTP/1.1, HTTP/2 and HTTP/3, with permessage-deflate. Write endpoints in Swift
+          with <code>WebSocketUpgrade</code>, or proxy them to a backend. <a href="docs/websockets.html">WebSockets</a></p>
+        </div>
+        <div class="feature">
+          <h3>Access log and metrics</h3>
+          <p>Common, Combined or JSON access logs and a Prometheus <code>/metrics</code> endpoint;
+          connection limits and timeouts. <a href="docs/running-on-a-mac.html#logs">Logs</a></p>
+        </div>
+        <div class="feature">
+          <h3>Graceful reload and restart</h3>
+          <p>SIGHUP or a file change reloads the config without dropping requests;
+          <code>photon restart</code> applies any change in process, with no gap in service;
+          SIGINT/SIGTERM drain open connections. <a href="docs/running-on-a-mac.html#shutdown-restart-and-reload">Reload</a></p>
+        </div>
+        <div class="feature">
+          <h3>Components for your own server</h3>
+          <p>Every part is a Swift library product. Add a <code>Router</code> and your own
+          handlers, keep only what you need. <a href="docs/choosing-components.html">Choosing components</a></p>
+        </div>
+        <div class="feature">
+          <h3>Built for macOS</h3>
+          <p>BSD sockets, kqueue and <code>sendfile</code> for cleartext; Network.framework for TLS
+          and QUIC. Binds <code>127.0.0.1</code> unless you ask otherwise. <a href="docs/running-on-a-mac.html">Running on a Mac</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="performance">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Fast where it counts</h2>
+        <p>With kept-alive connections PhotonHTTP serves static files faster than nginx, h2o,
+        Apache and Caddy on the same machine, behind only lighttpd.</p>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div class="num">~97k <small>req/s</small></div>
+          <p>Static files over keep-alive HTTP/1.1 at 64 connections; 14–20% ahead of nginx.</p>
+        </div>
+        <div class="stat">
+          <div class="num">21.9k <small>conn/s</small></div>
+          <p>New connections accepted on the BSD socket listener, vs nginx's 18.0k.</p>
+        </div>
+        <div class="stat">
+          <div class="num">146/146</div>
+          <p>h2spec conformance for HTTP/2, with limits against the known HTTP/2 attacks.</p>
+        </div>
+        <div class="stat">
+          <div class="num">~8 <small>MiB</small></div>
+          <p>Server memory while sending a 1 GiB file with <code>sendfile(2)</code>.</p>
+        </div>
+      </div>
+      <p class="fine">Measured on an Apple M4 Pro over loopback with the load client on the same
+      machine; treat the numbers as relative. <a href="docs/performance.html">Performance notes and records</a></p>
+    </div>
+  </section>
+
+  <section id="two-ways" class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Two ways to use it</h2>
+        <p>Run the ready-made server, or build your own from its parts.</p>
+      </div>
+      <div class="two-ways">
+        <div class="step">
+          <h3>The <code>photon</code> server, one JSON file</h3>
+          <p>A static site with an app behind it, compressed and logged:</p>
+<pre><code>{
+  "root": "public",
+  "compression": true,
+  "accessLog": { "path": "logs/access.log", "format": "combined" },
+  "proxy": [ { "path": "/api", "upstream": "http://127.0.0.1:9000" } ]
+}</code></pre>
+          <p class="note">Run it with <code>photon --config http-config.json</code>. Every key:
+          <a href="docs/running-on-a-mac.html#http-configjson-reference">the config reference</a>.</p>
+        </div>
+        <div class="step">
+          <h3>Your own server in Swift</h3>
+          <p>Compose only the components you need; the chain is built at compile time.</p>
+<pre><code>let server = Server(listeners: [try BSDSocketListener()], protocols: [HTTP1()]) {
+    AccessLog(format: .combined, destination: .standardOutput)
+    Compression()
+    router              // a Router with your routes
+    files               // StaticFiles, the terminal handler
+}
+try await server.run()</code></pre>
+          <p class="note">See <a href="docs/choosing-components.html">Choosing components</a> and
+          <a href="https://github.com/brennanMKE/PhotonHTTP/blob/main/Examples/custom-server/README.md" rel="noopener">Examples/custom-server</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>PhotonHTTP · a modular HTTP/1.1, HTTP/2 and HTTP/3 server for macOS, in Swift ·
+    <a href="https://github.com/brennanMKE/PhotonHTTP" rel="noopener">GitHub</a> · <a href="docs/">Docs</a> ·
+    <a href="llms.txt">llms.txt</a></p>
+  </div>
+</footer>
+</body>
+</html>
