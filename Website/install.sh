@@ -6,18 +6,19 @@
 #   scripts/install.sh                 # from a checkout: builds that checkout
 #
 # Options:
-#   --prefix DIR    install to DIR/bin (default: ~/.local, so ~/.local/bin/photon)
+#   --prefix DIR    install to DIR/bin (default: /usr/local, so /usr/local/bin/photon)
 #   --version REF   git tag or branch to build (default: main). From a checkout, building a
 #                   REF other than the checkout's own clones it fresh.
 #   --help          this text
 #
-# Builds from source with the Swift toolchain (macOS 15+, Swift 6.4: Xcode or swift.org) and
-# never uses sudo. Uninstall: rm ~/.local/bin/photon
+# Builds from source with the Swift toolchain (macOS 15+, Swift 6.4: Xcode or swift.org) as
+# you, then copies the binary into place, with sudo only when DIR/bin is not writable (it asks
+# for your password). Uninstall: sudo rm /usr/local/bin/photon
 
 set -euo pipefail
 
 REPO="https://github.com/brennanMKE/PhotonHTTP.git"
-PREFIX="${HOME}/.local"
+PREFIX="/usr/local"
 VERSION=""
 
 usage() { sed -n '2,16p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//' || true; }
@@ -68,19 +69,37 @@ built="$(cd "$SOURCE" && swift build -c release --show-bin-path)/photon"
 [[ -x "$built" ]] || fail "the build did not produce $built"
 
 BIN="$PREFIX/bin"
-mkdir -p "$BIN" 2>/dev/null || fail "cannot create $BIN; choose a writable --prefix (this script never uses sudo)"
-[[ -w "$BIN" ]] || fail "$BIN is not writable; choose another --prefix (this script never uses sudo)"
+# Only the copy is privileged. PHOTON_INSTALL_SUDO overrides the command (tests).
+SUDO=""
+if [[ -d "$BIN" && -w "$BIN" ]] || { [[ ! -e "$BIN" ]] && mkdir -p "$BIN" 2>/dev/null; }; then
+    :
+else
+    SUDO="${PHOTON_INSTALL_SUDO:-sudo}"
+    echo "==> $BIN is not writable by $(id -un); using sudo to install there (it may ask for your password)"
+    if [[ "$SUDO" == "sudo" ]] && ! sudo -n true 2>/dev/null && [[ ! -r /dev/tty ]]; then
+        fail "sudo needs a password but there is no terminal; run the installer from a terminal or pass --prefix DIR for a writable DIR"
+    fi
+    $SUDO mkdir -p "$BIN" || fail "could not create $BIN"
+fi
 # Replace atomically, so a running photon keeps its binary.
-install -m 755 "$built" "$BIN/.photon.new"
-mv -f "$BIN/.photon.new" "$BIN/photon"
+$SUDO install -m 755 "$built" "$BIN/.photon.new" || fail "could not copy photon into $BIN"
+$SUDO mv -f "$BIN/.photon.new" "$BIN/photon" || fail "could not move photon into place in $BIN"
 
 echo "==> Installed $BIN/photon"
+found="$(command -v photon 2>/dev/null || true)"
 case ":$PATH:" in
-    *":$BIN:"*) ;;
+    *":$BIN:"*)
+        if [[ -n "$found" && "$found" != "$BIN/photon" ]]; then
+            echo
+            echo "Note: 'photon' runs $found, which comes earlier on your PATH."
+            echo "Remove it to use the new one: rm \"$found\""
+        fi
+        ;;
     *)
         echo
-        echo "$BIN is not on your PATH. Add it with:"
-        echo "  echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+        echo "$BIN is not on your PATH. To run photon by name, add this line to your shell's"
+        echo "startup file (for zsh, ~/.zshrc):"
+        echo "  export PATH=\"$BIN:\$PATH\""
         ;;
 esac
 echo

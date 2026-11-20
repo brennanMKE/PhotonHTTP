@@ -28,7 +28,7 @@ JSON file, or compose its components into your own Swift server.
 
 ## Quick start
 
-Install (builds from source into `~/.local/bin`, no `sudo`):
+Install (builds from source and installs `/usr/local/bin/photon`; asks for your password if that folder needs `sudo`):
 
 ```bash
 curl -fsSL https://photon-http.sstools.co/install.sh | bash     # or scripts/install.sh from a checkout

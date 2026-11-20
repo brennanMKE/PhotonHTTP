@@ -3,7 +3,7 @@
 > PhotonHTTP is a fast, modular HTTP/1.1, HTTP/2 and HTTP/3 web server for macOS 15 and later, written in Swift 6 with Swift Concurrency and no package dependencies. Run it as the `photon` command, configured by one JSON file, or compose its components into your own Swift server.
 
 - Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org). Not built or tested on Linux.
-- Install (builds from source, installs `photon` to `~/.local/bin`, no sudo): `curl -fsSL https://photon-http.sstools.co/install.sh | bash` (options `--prefix DIR`, `--version REF`; from a checkout, `scripts/install.sh`).
+- Install (builds from source, installs `photon` to `/usr/local/bin`, using sudo for the copy only when needed): `curl -fsSL https://photon-http.sstools.co/install.sh | bash` (options `--prefix DIR`, `--version REF`; from a checkout, `scripts/install.sh`).
 - Serve a folder as a static website: `photon serve [DIR] [--port PORT] [--host HOST]` (defaults: current directory, port 8080, host 127.0.0.1; prints `listening 127.0.0.1:8080`).
 - Everything else (TLS, HTTP/2, HTTP/3, compression, logs, virtual hosts, auth, reverse proxy) is configured in `http-config.json` and run with `photon --config http-config.json`.
 - Source code: https://github.com/brennanMKE/PhotonHTTP

@@ -24,8 +24,9 @@ compression, logs or more than one site.
 ## Install
 
 One command clones [the repository](https://github.com/brennanMKE/PhotonHTTP), builds a
-release binary with your Swift toolchain and installs `photon` to `~/.local/bin`. It needs no
-sudo.
+release binary with your Swift toolchain and installs `photon` to `/usr/local/bin`, which is on
+every Mac's default `PATH`. Only the final copy uses sudo, and only when `/usr/local/bin` is not
+writable: the installer says so and asks for your password. It never edits your shell files.
 
 ```bash
 curl -fsSL https://photon-http.sstools.co/install.sh | bash
@@ -39,7 +40,7 @@ curl -fsSL https://photon-http.sstools.co/install.sh | bash -s -- --prefix ~/opt
 
 | Option | Meaning |
 |---|---|
-| `--prefix DIR` | Install to `DIR/bin` instead of `~/.local/bin`. It must be writable: the installer never uses sudo |
+| `--prefix DIR` | Install to `DIR/bin` instead of `/usr/local/bin`. A writable `DIR`, such as `~/.local`, needs no sudo |
 | `--version REF` | The git tag or branch to build. Default `main` |
 
 From a checkout of the repository, run the same installer directly:
@@ -54,14 +55,15 @@ Check that your shell finds it:
 photon --help
 ```
 
-If it says `command not found`, `~/.local/bin` is not on your `PATH` yet. Add it in
+If it says `command not found`, the install folder is not on your `PATH` (only possible with
+`--prefix`; the installer prints a warning). Add it in your shell's startup file, e.g.
 `~/.zshrc`:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"     # for --prefix ~/.local
 ```
 
-**Uninstall** by deleting the binary: `rm ~/.local/bin/photon` (or `DIR/bin/photon` with
+**Uninstall** by deleting the binary: `sudo rm /usr/local/bin/photon` (or `DIR/bin/photon` with
 `--prefix`). It has no other files and no dependencies outside the system.
 
 ## Serve a folder
@@ -295,17 +297,18 @@ executable maps SIGINT and SIGTERM to that drain. See
 curl -fsSL https://photon-http.sstools.co/install.sh | bash
 ```
 
-The installer clones the repository, builds a release `photon` with your Swift toolchain and
-installs it to `~/.local/bin/photon`. It never uses `sudo`; if `~/.local/bin` is not on your
-`PATH` it prints the line to add. Options (after `bash -s --`):
+The installer clones the repository, builds a release `photon` with your Swift toolchain (as
+you) and installs it to `/usr/local/bin/photon`, which is on every Mac's default `PATH`. Only
+the final copy uses `sudo`, and only when `/usr/local/bin` is not writable; it says so and asks
+for your password. It never edits your shell files. Options (after `bash -s --`):
 
 | Option | Meaning |
 |---|---|
-| `--prefix DIR` | Install to `DIR/bin` instead of `~/.local/bin` (must be writable) |
+| `--prefix DIR` | Install to `DIR/bin` instead of `/usr/local/bin`; a writable `DIR` (e.g. `~/.local`) needs no `sudo`. If `DIR/bin` is not on your `PATH`, the installer prints the `export` line to add |
 | `--version REF` | Git tag or branch to build (default `main`) |
 
 From a checkout, `scripts/install.sh` builds and installs that checkout. Run the installer
-again to update. Uninstall with `rm ~/.local/bin/photon`.
+again to update. Uninstall with `sudo rm /usr/local/bin/photon`.
 
 Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org).
 

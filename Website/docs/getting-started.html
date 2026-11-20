@@ -80,20 +80,22 @@ installer builds from source.</li>
 </ul>
 <h2 id="install"><a class="anchor" href="#install" aria-hidden="true">#</a>Install</h2>
 <p>One command clones <a href="https://github.com/brennanMKE/PhotonHTTP" rel="noopener">the repository</a>, builds a
-release binary with your Swift toolchain and installs <code>photon</code> to <code>~/.local/bin</code>. It needs no
-sudo.</p>
+release binary with your Swift toolchain and installs <code>photon</code> to <code>/usr/local/bin</code>, which is on
+every Mac's default <code>PATH</code>. Only the final copy uses sudo, and only when <code>/usr/local/bin</code> is not
+writable: the installer says so and asks for your password. It never edits your shell files.</p>
 <pre><code class="language-bash">curl -fsSL https://photon-http.sstools.co/install.sh | bash</code></pre>
 <p>Pass options after <code>bash -s --</code>:</p>
 <pre><code class="language-bash">curl -fsSL https://photon-http.sstools.co/install.sh | bash -s -- --prefix ~/opt --version main</code></pre>
-<div class="table-wrap"><table><thead><tr><th>Option</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--prefix DIR</code></td><td>Install to <code>DIR/bin</code> instead of <code>~/.local/bin</code>. It must be writable: the installer never uses sudo</td></tr><tr><td><code>--version REF</code></td><td>The git tag or branch to build. Default <code>main</code></td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Option</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--prefix DIR</code></td><td>Install to <code>DIR/bin</code> instead of <code>/usr/local/bin</code>. A writable <code>DIR</code>, such as <code>~/.local</code>, needs no sudo</td></tr><tr><td><code>--version REF</code></td><td>The git tag or branch to build. Default <code>main</code></td></tr></tbody></table></div>
 <p>From a checkout of the repository, run the same installer directly:</p>
 <pre><code class="language-bash">scripts/install.sh</code></pre>
 <p>Check that your shell finds it:</p>
 <pre><code class="language-bash">photon --help</code></pre>
-<p>If it says <code>command not found</code>, <code>~/.local/bin</code> is not on your <code>PATH</code> yet. Add it in
+<p>If it says <code>command not found</code>, the install folder is not on your <code>PATH</code> (only possible with
+<code>--prefix</code>; the installer prints a warning). Add it in your shell's startup file, e.g.
 <code>~/.zshrc</code>:</p>
-<pre><code class="language-bash">export PATH="$HOME/.local/bin:$PATH"</code></pre>
-<p><strong>Uninstall</strong> by deleting the binary: <code>rm ~/.local/bin/photon</code> (or <code>DIR/bin/photon</code> with
+<pre><code class="language-bash">export PATH="$HOME/.local/bin:$PATH"     # for --prefix ~/.local</code></pre>
+<p><strong>Uninstall</strong> by deleting the binary: <code>sudo rm /usr/local/bin/photon</code> (or <code>DIR/bin/photon</code> with
 <code>--prefix</code>). It has no other files and no dependencies outside the system.</p>
 <h2 id="serve-a-folder"><a class="anchor" href="#serve-a-folder" aria-hidden="true">#</a>Serve a folder</h2>
 <p><code>photon serve</code> serves a directory as a static website: the current directory unless you name

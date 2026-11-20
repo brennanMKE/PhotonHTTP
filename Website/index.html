@@ -93,7 +93,7 @@
         <div class="step">
           <h3><span class="n">1</span>Install</h3>
           <p>Clones the repository, builds a release binary with your Swift toolchain and installs
-          <code>photon</code> to <code>~/.local/bin</code>. No sudo.</p>
+          <code>photon</code> to <code>/usr/local/bin</code>, asking for your password only if that folder needs sudo.</p>
 <pre><code><span class="prompt">$ </span>curl -fsSL https://photon-http.sstools.co/install.sh | bash</code></pre>
           <p class="note">Needs macOS 15+ and a Swift 6.4 toolchain (Xcode or swift.org).
           Options: <code>--prefix DIR</code>, <code>--version REF</code>.

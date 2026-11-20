@@ -77,12 +77,13 @@
 </ul></details>
 <h2 id="install"><a class="anchor" href="#install" aria-hidden="true">#</a>Install</h2>
 <pre><code class="language-bash">curl -fsSL https://photon-http.sstools.co/install.sh | bash</code></pre>
-<p>The installer clones the repository, builds a release <code>photon</code> with your Swift toolchain and
-installs it to <code>~/.local/bin/photon</code>. It never uses <code>sudo</code>; if <code>~/.local/bin</code> is not on your
-<code>PATH</code> it prints the line to add. Options (after <code>bash -s --</code>):</p>
-<div class="table-wrap"><table><thead><tr><th>Option</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--prefix DIR</code></td><td>Install to <code>DIR/bin</code> instead of <code>~/.local/bin</code> (must be writable)</td></tr><tr><td><code>--version REF</code></td><td>Git tag or branch to build (default <code>main</code>)</td></tr></tbody></table></div>
+<p>The installer clones the repository, builds a release <code>photon</code> with your Swift toolchain (as
+you) and installs it to <code>/usr/local/bin/photon</code>, which is on every Mac's default <code>PATH</code>. Only
+the final copy uses <code>sudo</code>, and only when <code>/usr/local/bin</code> is not writable; it says so and asks
+for your password. It never edits your shell files. Options (after <code>bash -s --</code>):</p>
+<div class="table-wrap"><table><thead><tr><th>Option</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--prefix DIR</code></td><td>Install to <code>DIR/bin</code> instead of <code>/usr/local/bin</code>; a writable <code>DIR</code> (e.g. <code>~/.local</code>) needs no <code>sudo</code>. If <code>DIR/bin</code> is not on your <code>PATH</code>, the installer prints the <code>export</code> line to add</td></tr><tr><td><code>--version REF</code></td><td>Git tag or branch to build (default <code>main</code>)</td></tr></tbody></table></div>
 <p>From a checkout, <code>scripts/install.sh</code> builds and installs that checkout. Run the installer
-again to update. Uninstall with <code>rm ~/.local/bin/photon</code>.</p>
+again to update. Uninstall with <code>sudo rm /usr/local/bin/photon</code>.</p>
 <p>Requirements: macOS 15 or later and a Swift 6.4 toolchain (Xcode or swift.org).</p>
 <h3 id="build-by-hand"><a class="anchor" href="#build-by-hand" aria-hidden="true">#</a>Build by hand</h3>
 <pre><code class="language-bash">swift build -c release -j 2 --product photon     # or scripts/build.sh
